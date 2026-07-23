@@ -217,14 +217,6 @@ export default function Home() {
     if (isLoaded && !isSignedIn && (screen === "home" || screen === "editor")) showScreen("auth");
   }, [isLoaded, isSignedIn, screen, showScreen]);
 
-  if (!isLoaded) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)" }}>
-        <Spinner size={24} />
-      </div>
-    );
-  }
-
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -501,6 +493,14 @@ export default function Home() {
   }, [bakeImageToCanvas, recordEdit]);
 
   const presetIdsInUse = new Set(layers.map((l) => l.presetId));
+
+  if (!isLoaded) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)" }}>
+        <Spinner size={24} />
+      </div>
+    );
+  }
 
   return (
     <>
