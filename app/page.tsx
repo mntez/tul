@@ -1349,7 +1349,12 @@ function EffectPatternGrid({ activeMap, onSelect }: { activeMap: string; onSelec
       const w = 120, h = 120;
       c.width = w; c.height = h;
       const ctx = c.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, w, h);
+      const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      const dx = (w - dw) / 2;
+      const dy = (h - dh) / 2;
+      ctx.drawImage(img, dx, dy, dw, dh);
       const srcData = ctx.getImageData(0, 0, w, h);
 
       for (const opt of HALFTONE_MAP_OPTIONS) {
