@@ -90,6 +90,52 @@ export default function Home() {
   const [activeEffect, setActiveEffect] = useState<EffectId | null>(null);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(-1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [panning, setPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const previewRef = useRef<HTMLDivElement>(null);
+
+  const zoomIn = useCallback(() => {
+    setZoom((z) => {
+      if (z < 0) return 1;
+      const levels = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+      for (const l of levels) if (l > z) return l;
+      return z;
+    });
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    setZoom((z) => {
+      if (z < 0) return -1;
+      const levels = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+      for (let i = levels.length - 1; i >= 0; i--) if (levels[i] < z) return levels[i];
+      return 0.25;
+    });
+  }, []);
+
+  const zoomReset = useCallback(() => { setZoom(-1); setPanX(0); setPanY(0); }, []);
+
+  const zoomOneToOne = useCallback(() => { setZoom(1); setPanX(0); setPanY(0); }, []);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.deltaY < 0) zoomIn(); else zoomOut();
+  }, [zoomIn, zoomOut]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (zoom < 0) return;
+    setPanning(true);
+    setPanStart({ x: e.clientX - panX, y: e.clientY - panY });
+  }, [zoom, panX, panY]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!panning) return;
+    setPanX(e.clientX - panStart.x);
+    setPanY(e.clientY - panStart.y);
+  }, [panning, panStart]);
+
+  const handleMouseUp = useCallback(() => { setPanning(false); }, []);
   const layersRef = useRef(layers);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   const [undoStack, setUndoStack] = useState<EffectLayer[][]>([]);
@@ -760,14 +806,41 @@ export default function Home() {
           </aside>
 
           <aside className="editor-preview">
-            <div className="preview-header">Preview</div>
-            <div className="preview-content">
+            <div className="preview-header">
+              <span>Preview</span>
+              {currentImage && (
+                <div className="zoom-controls">
+                  <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
+                  <span className="zoom-label">{zoom < 0 ? "Fit" : `${Math.round(zoom * 100)}%`}</span>
+                  <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
+                  <button className="icon-btn zoom-btn" onClick={zoomReset} title="Fit to container">⊡</button>
+                  <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
+                </div>
+              )}
+            </div>
+            <div
+              className="preview-content"
+              ref={previewRef}
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              style={{ cursor: zoom >= 0 ? (panning ? "grabbing" : "grab") : "default" }}
+            >
               {currentImage ? (
-                <ImageWithSkeleton
-                  src={compare === "original" ? currentImage.src : (activeEffect && effectResultSrc ? effectResultSrc : currentImage.src)}
-                  alt="Final output"
-                  imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
-                />
+                <div style={{
+                  transform: zoom >= 0 ? `translate(${panX}px, ${panY}px) scale(${zoom})` : "none",
+                  transition: panning ? "none" : "transform 0.15s ease",
+                  transformOrigin: "center center",
+                  lineHeight: 0,
+                }}>
+                  <ImageWithSkeleton
+                    src={compare === "original" ? currentImage.src : (activeEffect && effectResultSrc ? effectResultSrc : currentImage.src)}
+                    alt="Final output"
+                    imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
+                  />
+                </div>
               ) : (
                 <span className="preview-empty">No image selected</span>
               )}
