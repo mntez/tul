@@ -34,16 +34,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider>
-      <html
-        lang="en"
-        className={`${instrumentSans.variable} ${instrumentSerif.variable} ${geistPixel.variable}`}
-        suppressHydrationWarning
-      >
-        <body>
+    <html
+      lang="en"
+      className={`${instrumentSans.variable} ${instrumentSerif.variable} ${geistPixel.variable}`}
+      suppressHydrationWarning
+    >
+      <body>
+        <ClerkProvider>
           <Providers>{children}</Providers>
-        </body>
-      </html>
-    </ClerkProvider>
+        </ClerkProvider>
+      </body>
+    </html>
   );
 }
