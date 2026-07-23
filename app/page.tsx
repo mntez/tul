@@ -87,7 +87,7 @@ export default function Home() {
   const [userPresets, setUserPresets] = useState<UserPreset[]>([]);
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
   const [presetNameInput, setPresetNameInput] = useState("");
-  const [activeEffect, setActiveEffect] = useState<EffectId | null>(null);
+  const [activeEffects, setActiveEffects] = useState<EffectId[]>([]);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
   const [zoom, setZoom] = useState(-1);
@@ -162,31 +162,38 @@ export default function Home() {
     setLayers(next);
   }, [redoStack]);
 
-  const activateEffect = useCallback((id: EffectId | null) => {
-    setActiveEffect(id);
-    if (id && !effectSettings[id]) {
-      const defaults: Record<string, any> = {
-        halftone: DEFAULT_HALFTONE_SETTINGS,
-        pixelate: DEFAULT_PIXELATE,
-        glitch: DEFAULT_GLITCH,
-        duotone: DEFAULT_DUOTONE,
-        vignette: DEFAULT_VIGNETTE,
-        noise: DEFAULT_NOISE,
-        kaleidoscope: DEFAULT_KALEIDOSCOPE,
-        ripple: DEFAULT_RIPPLE,
-        ascii: DEFAULT_ASCII,
-        receipt: DEFAULT_RECEIPT,
-        "motion-blur": DEFAULT_MOTION_BLUR,
-        "radial-blur": DEFAULT_RADIAL_BLUR,
-        crt: DEFAULT_CRT,
-        threshold: DEFAULT_THRESHOLD,
-        "rgb-shift": DEFAULT_RGB_SHIFT,
-        "motion-trail": DEFAULT_MOTION_TRAIL,
-        bloom: DEFAULT_BLOOM,
-        emboss: DEFAULT_EMBOSS,
-      };
-      setEffectSettings((prev) => ({ ...prev, [id]: defaults[id] }));
-    }
+  const EFFECT_DEFAULTS: Record<string, any> = {
+    halftone: DEFAULT_HALFTONE_SETTINGS,
+    pixelate: DEFAULT_PIXELATE,
+    glitch: DEFAULT_GLITCH,
+    duotone: DEFAULT_DUOTONE,
+    vignette: DEFAULT_VIGNETTE,
+    noise: DEFAULT_NOISE,
+    kaleidoscope: DEFAULT_KALEIDOSCOPE,
+    ripple: DEFAULT_RIPPLE,
+    ascii: DEFAULT_ASCII,
+    receipt: DEFAULT_RECEIPT,
+    "motion-blur": DEFAULT_MOTION_BLUR,
+    "radial-blur": DEFAULT_RADIAL_BLUR,
+    crt: DEFAULT_CRT,
+    threshold: DEFAULT_THRESHOLD,
+    "rgb-shift": DEFAULT_RGB_SHIFT,
+    "motion-trail": DEFAULT_MOTION_TRAIL,
+    bloom: DEFAULT_BLOOM,
+    emboss: DEFAULT_EMBOSS,
+  };
+
+  const isEffectActive = useCallback((id: EffectId) => activeEffects.includes(id), [activeEffects]);
+
+  const toggleEffect = useCallback((id: EffectId) => {
+    setActiveEffects((prev) => {
+      const on = prev.includes(id);
+      if (on) return prev.filter((e) => e !== id);
+      if (!effectSettings[id]) {
+        setEffectSettings((s) => ({ ...s, [id]: EFFECT_DEFAULTS[id] }));
+      }
+      return [...prev, id];
+    });
   }, [effectSettings]);
 
   const getEffectSettings = useCallback(function(id: string, defaults: any) {
@@ -247,8 +254,41 @@ export default function Home() {
     ]);
   }, [pushHistory]);
 
+  const applySingleEffect = useCallback((id: EffectId, imageData: ImageData) => {
+    const s = getEffectSettings(id, EFFECT_DEFAULTS[id]);
+    switch (id) {
+      case "halftone": return applyHalftone(imageData, s);
+      case "pixelate": return applyPixelate(imageData, s);
+      case "glitch": return applyGlitch(imageData, s);
+      case "duotone": return applyDuotone(imageData, s);
+      case "vignette": return applyVignette(imageData, s);
+      case "noise": return applyNoise(imageData, s);
+      case "kaleidoscope": return applyKaleidoscope(imageData, s);
+      case "ripple": return applyRipple(imageData, s);
+      case "ascii": return applyASCII(imageData, s);
+      case "receipt": return applyReceipt(imageData, s);
+      case "motion-blur": return applyMotionBlur(imageData, s);
+      case "radial-blur": return applyRadialBlur(imageData, s);
+      case "crt": return applyCRT(imageData, s);
+      case "threshold": return applyThreshold(imageData, s);
+      case "rgb-shift": return applyRGBShift(imageData, s);
+      case "motion-trail": return applyMotionTrail(imageData, s);
+      case "bloom": return applyBloom(imageData, s);
+      case "emboss": return applyEmboss(imageData, s);
+    }
+  }, [getEffectSettings]);
+
+  const chainEffects = useCallback((imageData: ImageData, ids: EffectId[]) => {
+    let data = imageData;
+    for (const id of ids) {
+      const r = applySingleEffect(id, data);
+      if (r) data = r;
+    }
+    return data;
+  }, [applySingleEffect]);
+
   useEffect(() => {
-    if (!currentImage || !activeEffect) { setEffectResultSrc(null); return; }
+    if (!currentImage || activeEffects.length === 0) { setEffectResultSrc(null); return; }
     const img = new Image();
     img.onload = () => {
       const c = document.createElement("canvas");
@@ -257,30 +297,12 @@ export default function Home() {
       const ctx = c.getContext("2d")!;
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, c.width, c.height);
-      let result: ImageData | null = null;
-      const id = activeEffect;
-      if (id === "halftone") result = applyHalftone(imageData, getEffectSettings(id, DEFAULT_HALFTONE_SETTINGS));
-      else if (id === "pixelate") result = applyPixelate(imageData, getEffectSettings(id, DEFAULT_PIXELATE));
-      else if (id === "glitch") result = applyGlitch(imageData, getEffectSettings(id, DEFAULT_GLITCH));
-      else if (id === "duotone") result = applyDuotone(imageData, getEffectSettings(id, DEFAULT_DUOTONE));
-      else if (id === "vignette") result = applyVignette(imageData, getEffectSettings(id, DEFAULT_VIGNETTE));
-      else if (id === "noise") result = applyNoise(imageData, getEffectSettings(id, DEFAULT_NOISE));
-      else if (id === "kaleidoscope") result = applyKaleidoscope(imageData, getEffectSettings(id, DEFAULT_KALEIDOSCOPE));
-      else if (id === "ripple") result = applyRipple(imageData, getEffectSettings(id, DEFAULT_RIPPLE));
-      else if (id === "ascii") result = applyASCII(imageData, getEffectSettings(id, DEFAULT_ASCII));
-      else if (id === "receipt") result = applyReceipt(imageData, getEffectSettings(id, DEFAULT_RECEIPT));
-      else if (id === "motion-blur") result = applyMotionBlur(imageData, getEffectSettings(id, DEFAULT_MOTION_BLUR));
-      else if (id === "radial-blur") result = applyRadialBlur(imageData, getEffectSettings(id, DEFAULT_RADIAL_BLUR));
-      else if (id === "crt") result = applyCRT(imageData, getEffectSettings(id, DEFAULT_CRT));
-      else if (id === "threshold") result = applyThreshold(imageData, getEffectSettings(id, DEFAULT_THRESHOLD));
-      else if (id === "rgb-shift") result = applyRGBShift(imageData, getEffectSettings(id, DEFAULT_RGB_SHIFT));
-      else if (id === "motion-trail") result = applyMotionTrail(imageData, getEffectSettings(id, DEFAULT_MOTION_TRAIL));
-      else if (id === "bloom") result = applyBloom(imageData, getEffectSettings(id, DEFAULT_BLOOM));
-      else if (id === "emboss") result = applyEmboss(imageData, getEffectSettings(id, DEFAULT_EMBOSS));
-      if (result) { ctx.putImageData(result, 0, 0); setEffectResultSrc(c.toDataURL()); }
+      const result = chainEffects(imageData, activeEffects);
+      ctx.putImageData(result, 0, 0);
+      setEffectResultSrc(c.toDataURL());
     };
     img.src = currentImage.src;
-  }, [currentImage, activeEffect, effectSettings]);
+  }, [currentImage, activeEffects, effectSettings]);
 
   const userPresetFilter = useCallback((preset: UserPreset, intensity: number) => {
     const f = preset.filters;
@@ -414,7 +436,7 @@ export default function Home() {
   const bakeImageToCanvas = useCallback(
     (callback: (canvas: HTMLCanvasElement) => void) => {
       if (!currentImage) return;
-      const src = activeEffect && effectResultSrc ? effectResultSrc : currentImage.src;
+      const src = activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src;
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
@@ -429,7 +451,7 @@ export default function Home() {
       };
       img.src = src;
     },
-    [currentImage, getCombinedFilterString, activeEffect, effectResultSrc]
+    [currentImage, getCombinedFilterString, activeEffects, effectResultSrc]
   );
 
   const bakeAndDownload = useCallback(() => {
@@ -654,152 +676,155 @@ export default function Home() {
                 </>
               ) : (
                 <div className="effects-list">
-                  {EFFECTS.map((eff) => (
-                    <div key={eff.id}>
-                      <div className={`effect-card ${activeEffect === eff.id ? "active" : ""}`} onClick={() => activateEffect(activeEffect === eff.id ? null : eff.id)}>
-                        <div className="effect-card-header">
-                          <span className="effect-name">{eff.name}</span>
-                          <span className="effect-badge">canvas</span>
+                  {EFFECTS.map((eff) => {
+                    const on = isEffectActive(eff.id);
+                    return (
+                      <div key={eff.id}>
+                        <div className={`effect-card ${on ? "active" : ""}`} onClick={() => toggleEffect(eff.id)}>
+                          <div className="effect-card-header">
+                            <span className="effect-name">{eff.name}</span>
+                            <span className="effect-badge">{on ? "on" : "canvas"}</span>
+                          </div>
+                          <p className="effect-desc">{eff.desc}</p>
                         </div>
-                        <p className="effect-desc">{eff.desc}</p>
-                      </div>
 
-                      {activeEffect === eff.id && eff.id === "halftone" && (
-                        <EffectHalftoneControls
-                          settings={getEffectSettings("halftone", DEFAULT_HALFTONE_SETTINGS)}
-                          onChange={(patch) => updateEffectSettings("halftone", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "pixelate" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("pixelate", DEFAULT_PIXELATE)}
-                          onChange={(patch) => updateEffectSettings("pixelate", patch)}
-                          controls={[{ key: "blockSize", label: "Block size", min: 2, max: 40, step: 1 }]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "glitch" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("glitch", DEFAULT_GLITCH)}
-                          onChange={(patch) => updateEffectSettings("glitch", patch)}
-                          controls={[
-                            { key: "shift", label: "Shift", min: 1, max: 30, step: 1 },
-                            { key: "intensity", label: "Intensity", min: 0.1, max: 1, step: 0.05 },
-                            { key: "jitter", label: "Jitter", min: 0, max: 10, step: 0.5 },
-                          ]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "motion-blur" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("motion-blur", DEFAULT_MOTION_BLUR)}
-                          onChange={(patch) => updateEffectSettings("motion-blur", patch)}
-                          controls={[
-                            { key: "length", label: "Length", min: 1, max: 50, step: 1 },
-                            { key: "angle", label: "Angle", min: 0, max: 360, step: 1 },
-                            { key: "quality", label: "Quality", min: 2, max: 20, step: 1 },
-                          ]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "radial-blur" && (
-                        <EffectRadialBlurControls
-                          settings={getEffectSettings("radial-blur", DEFAULT_RADIAL_BLUR)}
-                          onChange={(patch) => updateEffectSettings("radial-blur", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "duotone" && (
-                        <EffectDuotoneControls
-                          settings={getEffectSettings("duotone", DEFAULT_DUOTONE)}
-                          onChange={(patch) => updateEffectSettings("duotone", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "vignette" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("vignette", DEFAULT_VIGNETTE)}
-                          onChange={(patch) => updateEffectSettings("vignette", patch)}
-                          controls={[
-                            { key: "strength", label: "Strength", min: 0, max: 1, step: 0.05 },
-                            { key: "radius", label: "Radius", min: 0.1, max: 1.5, step: 0.05 },
-                          ]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "noise" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("noise", DEFAULT_NOISE)}
-                          onChange={(patch) => updateEffectSettings("noise", patch)}
-                          controls={[{ key: "amount", label: "Amount", min: 0, max: 0.5, step: 0.01 }]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "kaleidoscope" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("kaleidoscope", DEFAULT_KALEIDOSCOPE)}
-                          onChange={(patch) => updateEffectSettings("kaleidoscope", patch)}
-                          controls={[{ key: "segments", label: "Segments", min: 2, max: 24, step: 1 }]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "ripple" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("ripple", DEFAULT_RIPPLE)}
-                          onChange={(patch) => updateEffectSettings("ripple", patch)}
-                          controls={[
-                            { key: "amplitude", label: "Amplitude", min: 1, max: 30, step: 1 },
-                            { key: "frequency", label: "Frequency", min: 1, max: 50, step: 1 },
-                          ]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "ascii" && (
-                        <EffectASCIIControls
-                          settings={getEffectSettings("ascii", DEFAULT_ASCII)}
-                          onChange={(patch) => updateEffectSettings("ascii", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "receipt" && (
-                        <EffectSliderControls
-                          settings={getEffectSettings("receipt", DEFAULT_RECEIPT)}
-                          onChange={(patch) => updateEffectSettings("receipt", patch)}
-                          controls={[
-                            { key: "noise", label: "Noise", min: 0, max: 0.3, step: 0.01 },
-                            { key: "distortion", label: "Distortion", min: 0, max: 0.1, step: 0.005 },
-                            { key: "vignette", label: "Vignette", min: 0, max: 0.5, step: 0.01 },
-                          ]}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "crt" && (
-                        <EffectCRTControls
-                          settings={getEffectSettings("crt", DEFAULT_CRT)}
-                          onChange={(patch) => updateEffectSettings("crt", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "threshold" && (
-                        <EffectThresholdControls
-                          settings={getEffectSettings("threshold", DEFAULT_THRESHOLD)}
-                          onChange={(patch) => updateEffectSettings("threshold", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "rgb-shift" && (
-                        <EffectRGBShiftControls
-                          settings={getEffectSettings("rgb-shift", DEFAULT_RGB_SHIFT)}
-                          onChange={(patch) => updateEffectSettings("rgb-shift", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "motion-trail" && (
-                        <EffectMotionTrailControls
-                          settings={getEffectSettings("motion-trail", DEFAULT_MOTION_TRAIL)}
-                          onChange={(patch) => updateEffectSettings("motion-trail", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "bloom" && (
-                        <EffectBloomControls
-                          settings={getEffectSettings("bloom", DEFAULT_BLOOM)}
-                          onChange={(patch) => updateEffectSettings("bloom", patch)}
-                        />
-                      )}
-                      {activeEffect === eff.id && eff.id === "emboss" && (
-                        <EffectEmbossControls
-                          settings={getEffectSettings("emboss", DEFAULT_EMBOSS)}
-                          onChange={(patch) => updateEffectSettings("emboss", patch)}
-                        />
-                      )}
-                    </div>
-                  ))}
+                        {on && eff.id === "halftone" && (
+                          <EffectHalftoneControls
+                            settings={getEffectSettings("halftone", DEFAULT_HALFTONE_SETTINGS)}
+                            onChange={(patch) => updateEffectSettings("halftone", patch)}
+                          />
+                        )}
+                        {on && eff.id === "pixelate" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("pixelate", DEFAULT_PIXELATE)}
+                            onChange={(patch) => updateEffectSettings("pixelate", patch)}
+                            controls={[{ key: "blockSize", label: "Block size", min: 2, max: 40, step: 1 }]}
+                          />
+                        )}
+                        {on && eff.id === "glitch" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("glitch", DEFAULT_GLITCH)}
+                            onChange={(patch) => updateEffectSettings("glitch", patch)}
+                            controls={[
+                              { key: "shift", label: "Shift", min: 1, max: 30, step: 1 },
+                              { key: "intensity", label: "Intensity", min: 0.1, max: 1, step: 0.05 },
+                              { key: "jitter", label: "Jitter", min: 0, max: 10, step: 0.5 },
+                            ]}
+                          />
+                        )}
+                        {on && eff.id === "motion-blur" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("motion-blur", DEFAULT_MOTION_BLUR)}
+                            onChange={(patch) => updateEffectSettings("motion-blur", patch)}
+                            controls={[
+                              { key: "length", label: "Length", min: 1, max: 50, step: 1 },
+                              { key: "angle", label: "Angle", min: 0, max: 360, step: 1 },
+                              { key: "quality", label: "Quality", min: 2, max: 20, step: 1 },
+                            ]}
+                          />
+                        )}
+                        {on && eff.id === "radial-blur" && (
+                          <EffectRadialBlurControls
+                            settings={getEffectSettings("radial-blur", DEFAULT_RADIAL_BLUR)}
+                            onChange={(patch) => updateEffectSettings("radial-blur", patch)}
+                          />
+                        )}
+                        {on && eff.id === "duotone" && (
+                          <EffectDuotoneControls
+                            settings={getEffectSettings("duotone", DEFAULT_DUOTONE)}
+                            onChange={(patch) => updateEffectSettings("duotone", patch)}
+                          />
+                        )}
+                        {on && eff.id === "vignette" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("vignette", DEFAULT_VIGNETTE)}
+                            onChange={(patch) => updateEffectSettings("vignette", patch)}
+                            controls={[
+                              { key: "strength", label: "Strength", min: 0, max: 1, step: 0.05 },
+                              { key: "radius", label: "Radius", min: 0.1, max: 1.5, step: 0.05 },
+                            ]}
+                          />
+                        )}
+                        {on && eff.id === "noise" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("noise", DEFAULT_NOISE)}
+                            onChange={(patch) => updateEffectSettings("noise", patch)}
+                            controls={[{ key: "amount", label: "Amount", min: 0, max: 0.5, step: 0.01 }]}
+                          />
+                        )}
+                        {on && eff.id === "kaleidoscope" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("kaleidoscope", DEFAULT_KALEIDOSCOPE)}
+                            onChange={(patch) => updateEffectSettings("kaleidoscope", patch)}
+                            controls={[{ key: "segments", label: "Segments", min: 2, max: 24, step: 1 }]}
+                          />
+                        )}
+                        {on && eff.id === "ripple" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("ripple", DEFAULT_RIPPLE)}
+                            onChange={(patch) => updateEffectSettings("ripple", patch)}
+                            controls={[
+                              { key: "amplitude", label: "Amplitude", min: 1, max: 30, step: 1 },
+                              { key: "frequency", label: "Frequency", min: 1, max: 50, step: 1 },
+                            ]}
+                          />
+                        )}
+                        {on && eff.id === "ascii" && (
+                          <EffectASCIIControls
+                            settings={getEffectSettings("ascii", DEFAULT_ASCII)}
+                            onChange={(patch) => updateEffectSettings("ascii", patch)}
+                          />
+                        )}
+                        {on && eff.id === "receipt" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("receipt", DEFAULT_RECEIPT)}
+                            onChange={(patch) => updateEffectSettings("receipt", patch)}
+                            controls={[
+                              { key: "noise", label: "Noise", min: 0, max: 0.3, step: 0.01 },
+                              { key: "distortion", label: "Distortion", min: 0, max: 0.1, step: 0.005 },
+                              { key: "vignette", label: "Vignette", min: 0, max: 0.5, step: 0.01 },
+                            ]}
+                          />
+                        )}
+                        {on && eff.id === "crt" && (
+                          <EffectCRTControls
+                            settings={getEffectSettings("crt", DEFAULT_CRT)}
+                            onChange={(patch) => updateEffectSettings("crt", patch)}
+                          />
+                        )}
+                        {on && eff.id === "threshold" && (
+                          <EffectThresholdControls
+                            settings={getEffectSettings("threshold", DEFAULT_THRESHOLD)}
+                            onChange={(patch) => updateEffectSettings("threshold", patch)}
+                          />
+                        )}
+                        {on && eff.id === "rgb-shift" && (
+                          <EffectRGBShiftControls
+                            settings={getEffectSettings("rgb-shift", DEFAULT_RGB_SHIFT)}
+                            onChange={(patch) => updateEffectSettings("rgb-shift", patch)}
+                          />
+                        )}
+                        {on && eff.id === "motion-trail" && (
+                          <EffectMotionTrailControls
+                            settings={getEffectSettings("motion-trail", DEFAULT_MOTION_TRAIL)}
+                            onChange={(patch) => updateEffectSettings("motion-trail", patch)}
+                          />
+                        )}
+                        {on && eff.id === "bloom" && (
+                          <EffectBloomControls
+                            settings={getEffectSettings("bloom", DEFAULT_BLOOM)}
+                            onChange={(patch) => updateEffectSettings("bloom", patch)}
+                          />
+                        )}
+                        {on && eff.id === "emboss" && (
+                          <EffectEmbossControls
+                            settings={getEffectSettings("emboss", DEFAULT_EMBOSS)}
+                            onChange={(patch) => updateEffectSettings("emboss", patch)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -836,7 +861,7 @@ export default function Home() {
                   lineHeight: 0,
                 }}>
                   <ImageWithSkeleton
-                    src={compare === "original" ? currentImage.src : (activeEffect && effectResultSrc ? effectResultSrc : currentImage.src)}
+                    src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
                     alt="Final output"
                     imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
                   />
@@ -999,7 +1024,7 @@ export default function Home() {
       <div className={`modal-backdrop ${showExport ? "show" : ""}`} onClick={() => setShowExport(false)} />
       <div className={`modal ${showExport ? "show" : ""}`}>
         <div className="modal-preview">
-          {currentImage && <ImageWithSkeleton src={activeEffect && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
+          {currentImage && <ImageWithSkeleton src={activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
         </div>
         <div className="modal-actions">
           <FadeIn show={exporting}>

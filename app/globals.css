@@ -723,6 +723,12 @@ button, input {
 
 .effect-card.active {
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.effect-card.active .effect-badge {
+  background: var(--accent);
+  color: #fff;
 }
 
 .effect-card-header {
