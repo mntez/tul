@@ -228,6 +228,9 @@ export default function Home() {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
       setLayers([]);
       setCompare("edited");
+      setZoom(1);
+      setPanX(0);
+      setPanY(0);
       showScreen("editor");
     };
     reader.readAsDataURL(file);
@@ -863,7 +866,7 @@ export default function Home() {
                   <ImageWithSkeleton
                     src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
                     alt="Final output"
-                    imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
+                    imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none", maxWidth: zoom >= 0 ? "none" : undefined, maxHeight: zoom >= 0 ? "none" : undefined }}
                   />
                 </div>
               ) : (
@@ -905,16 +908,16 @@ export default function Home() {
             {/* Layers */}
             <div className="layers-section">
               <div className="workspace-section-header">
-                <span>Effects ({layers.length})</span>
+                <span>Effects ({layers.length + activeEffects.length})</span>
                 <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                   <button className="icon-btn" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)" style={{ fontSize: "14px" }}>&#x21A9;</button>
                   <button className="icon-btn" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)" style={{ fontSize: "14px" }}>&#x21AA;</button>
                   <button className="btn btn-ghost" onClick={() => addLayer("mono")} style={{ padding: "4px 10px", fontSize: "12px" }}>+ Add</button>
                 </div>
               </div>
-              {layers.length === 0 ? (
+              {layers.length === 0 && activeEffects.length === 0 ? (
                 <div className="layers-empty">
-                  Click a preset in the sidebar to add an effect layer
+                  Click a preset or effect to add a layer
                 </div>
               ) : (
                 <div className="layers-list">
@@ -978,6 +981,35 @@ export default function Home() {
                             value={layer.intensity}
                             onChange={(e) => updateLayerIntensity(layer.id, Number(e.target.value))}
                           />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {activeEffects.map((effId, i) => {
+                    const def = EFFECTS.find((e) => e.id === effId);
+                    return (
+                      <div key={effId} className="layer-item layer-effect-item">
+                        <div className="layer-top">
+                          <div className="layer-left">
+                            <span className="layer-index">{layers.length + i + 1}</span>
+                            <div className="layer-thumb-small layer-icon-thumb">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18 }}>
+                                <rect x="2" y="2" width="20" height="20" rx="2.5" />
+                                <circle cx="12" cy="12" r="3" />
+                              </svg>
+                            </div>
+                            <div>
+                              <div className="layer-name">{def?.name || effId}</div>
+                              <span className="effect-badge" style={{ fontSize: 10, padding: "1px 6px" }}>canvas</span>
+                            </div>
+                          </div>
+                          <div className="layer-actions">
+                            <button className="icon-btn" onClick={() => toggleEffect(effId)} title="Remove effect">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-muted)" }}>
+                                <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

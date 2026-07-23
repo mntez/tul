@@ -1053,6 +1053,18 @@ input[type="range"]::-moz-range-thumb {
   cursor: grabbing;
 }
 
+.layer-effect-item {
+  border-left: 2px solid var(--accent);
+}
+
+.layer-icon-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+}
+
 .layer-top {
   display: flex;
   align-items: center;
