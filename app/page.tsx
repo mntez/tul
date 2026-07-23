@@ -90,6 +90,31 @@ export default function Home() {
   const [activeEffect, setActiveEffect] = useState<EffectId | null>(null);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
+  const layersRef = useRef(layers);
+  useEffect(() => { layersRef.current = layers; }, [layers]);
+  const [undoStack, setUndoStack] = useState<EffectLayer[][]>([]);
+  const [redoStack, setRedoStack] = useState<EffectLayer[][]>([]);
+
+  const pushHistory = useCallback(() => {
+    setUndoStack((prev) => [...prev.slice(-49), layersRef.current]);
+    setRedoStack([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    const prev = undoStack[undoStack.length - 1];
+    if (!prev) return;
+    setUndoStack((s) => s.slice(0, -1));
+    setRedoStack((s) => [...s, layersRef.current]);
+    setLayers(prev);
+  }, [undoStack]);
+
+  const redo = useCallback(() => {
+    const next = redoStack[redoStack.length - 1];
+    if (!next) return;
+    setRedoStack((s) => s.slice(0, -1));
+    setUndoStack((s) => [...s, layersRef.current]);
+    setLayers(next);
+  }, [redoStack]);
 
   const activateEffect = useCallback((id: EffectId | null) => {
     setActiveEffect(id);
@@ -169,11 +194,12 @@ export default function Home() {
   }, []);
 
   const applySavedPreset = useCallback((preset: SavedPreset) => {
+    pushHistory();
     setLayers((prev) => [
       ...prev,
       ...preset.layers.map((l) => ({ id: Date.now().toString() + Math.random(), presetId: l.presetId, intensity: l.intensity, enabled: true })),
     ]);
-  }, []);
+  }, [pushHistory]);
 
   useEffect(() => {
     if (!currentImage || !activeEffect) { setEffectResultSrc(null); return; }
@@ -246,28 +272,34 @@ export default function Home() {
 
   const addLayer = useCallback((presetId: string) => {
     if (presetId === "original") {
+      pushHistory();
       setLayers([]);
       return;
     }
+    pushHistory();
     setLayers((prev) => [
       ...prev,
       { id: Date.now().toString(), presetId, intensity: 100, enabled: true },
     ]);
-  }, []);
+  }, [pushHistory]);
 
   const removeLayer = useCallback((id: string) => {
+    pushHistory();
     setLayers((prev) => prev.filter((l) => l.id !== id));
-  }, []);
+  }, [pushHistory]);
 
   const updateLayerIntensity = useCallback((id: string, intensity: number) => {
+    pushHistory();
     setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, intensity } : l)));
-  }, []);
+  }, [pushHistory]);
 
   const toggleLayer = useCallback((id: string) => {
+    pushHistory();
     setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, enabled: !l.enabled } : l)));
-  }, []);
+  }, [pushHistory]);
 
   const moveLayer = useCallback((id: string, dir: "up" | "down") => {
+    pushHistory();
     setLayers((prev) => {
       const idx = prev.findIndex((l) => l.id === id);
       if (idx === -1) return prev;
@@ -277,17 +309,20 @@ export default function Home() {
       [arr[idx], arr[next]] = [arr[next], arr[idx]];
       return arr;
     });
-  }, []);
+  }, [pushHistory]);
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const dragPushedRef = useRef(false);
 
   const handleDragStart = useCallback((index: number) => {
     setDragIndex(index);
+    dragPushedRef.current = false;
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (dragIndex === null || dragIndex === index) return;
+    if (!dragPushedRef.current) { dragPushedRef.current = true; pushHistory(); }
     setLayers((prev) => {
       const arr = [...prev];
       const [removed] = arr.splice(dragIndex, 1);
@@ -295,11 +330,23 @@ export default function Home() {
       return arr;
     });
     setDragIndex(index);
-  }, [dragIndex]);
+  }, [dragIndex, pushHistory]);
 
   const handleDragEnd = useCallback(() => {
     setDragIndex(null);
   }, []);
+
+  // handleKeyboard
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        if (e.shiftKey) { e.preventDefault(); redo(); }
+        else { e.preventDefault(); undo(); }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo, layersRef]);
 
   const recordEdit = useCallback(() => {
     if (!currentImage) return;
@@ -761,7 +808,11 @@ export default function Home() {
             <div className="layers-section">
               <div className="workspace-section-header">
                 <span>Effects ({layers.length})</span>
-                <button className="btn btn-ghost" onClick={() => addLayer("mono")} style={{ padding: "4px 10px", fontSize: "12px" }}>+ Add</button>
+                <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                  <button className="icon-btn" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)" style={{ fontSize: "14px" }}>&#x21A9;</button>
+                  <button className="icon-btn" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)" style={{ fontSize: "14px" }}>&#x21AA;</button>
+                  <button className="btn btn-ghost" onClick={() => addLayer("mono")} style={{ padding: "4px 10px", fontSize: "12px" }}>+ Add</button>
+                </div>
               </div>
               {layers.length === 0 ? (
                 <div className="layers-empty">
