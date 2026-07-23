@@ -225,6 +225,29 @@ export default function Home() {
     if (isLoaded && !isSignedIn && !guestMode && (screen === "home" || screen === "editor")) showScreen("auth");
   }, [isLoaded, isSignedIn, guestMode, screen, showScreen]);
 
+  // Load persisted state on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("tul_state");
+      if (!saved) return;
+      const parsed = JSON.parse(saved);
+      if (parsed.guestMode) setGuestMode(true);
+      if (Array.isArray(parsed.layers)) setLayers(parsed.layers);
+      if (Array.isArray(parsed.recentEdits)) setRecentEdits(parsed.recentEdits);
+    } catch {}
+  }, []);
+
+  // Persist state changes
+  useEffect(() => {
+    try {
+      localStorage.setItem("tul_state", JSON.stringify({
+        guestMode,
+        layers,
+        recentEdits: recentEdits.map(({ id, layers }) => ({ id, layers })),
+      }));
+    } catch {}
+  }, [guestMode, layers, recentEdits]);
+
   const handleGoogleSignIn = useCallback(async () => {
     if (!signIn) return;
     setAuthLoading(true);
@@ -464,6 +487,7 @@ export default function Home() {
 
   const openEditorWithRecent = useCallback(
     (edit: RecentEdit) => {
+      if (!edit.src) { fileInputRef.current?.click(); return; }
       setCurrentImage({ src: edit.src, name: "reopened" });
       setLayers(edit.layers);
       showScreen("editor");
@@ -654,7 +678,11 @@ export default function Home() {
                 {[...recentEdits].reverse().map((edit) => (
                   <div key={edit.id} className="recent-card" onClick={() => openEditorWithRecent(edit)}>
                     <div className="thumb-wrap">
-                      <img src={edit.src} alt="" />
+                      {edit.src ? <img src={edit.src} alt="" /> : (
+                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--card)", color: "var(--ink-muted)", fontSize: "11px" }}>
+                          Re-upload
+                        </div>
+                      )}
                     </div>
                     <div className="cap">{edit.layers.length} effect{edit.layers.length !== 1 ? "s" : ""}</div>
                   </div>
