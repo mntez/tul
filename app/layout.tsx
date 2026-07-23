@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import { Instrument_Sans, Instrument_Serif } from "next/font/google";
 import Providers from "./providers";
 import "./globals.css";
@@ -16,6 +17,11 @@ const instrumentSerif = Instrument_Serif({
   style: ["normal", "italic"],
 });
 
+const geistPixel = localFont({
+  variable: "--font-pixel",
+  src: "../public/fonts/GeistPixel-Square.ttf",
+});
+
 export const metadata: Metadata = {
   title: "tul — edit photos, have fun",
   description: "Upload a photo. Pick a look. Done.",
@@ -29,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${instrumentSans.variable} ${instrumentSerif.variable}`}
+      className={`${instrumentSans.variable} ${instrumentSerif.variable} ${geistPixel.variable}`}
       suppressHydrationWarning
     >
       <body>
