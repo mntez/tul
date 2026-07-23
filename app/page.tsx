@@ -228,9 +228,6 @@ export default function Home() {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
       setLayers([]);
       setCompare("edited");
-      setZoom(1);
-      setPanX(0);
-      setPanY(0);
       showScreen("editor");
     };
     reader.readAsDataURL(file);
