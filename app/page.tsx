@@ -83,6 +83,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [guestMode, setGuestMode] = useState(false);
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [recentEdits, setRecentEdits] = useState<RecentEdit[]>([]);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
@@ -221,8 +222,8 @@ export default function Home() {
 
   // Redirect to auth if not signed in on protected screens
   useEffect(() => {
-    if (isLoaded && !isSignedIn && (screen === "home" || screen === "editor")) showScreen("auth");
-  }, [isLoaded, isSignedIn, screen, showScreen]);
+    if (isLoaded && !isSignedIn && !guestMode && (screen === "home" || screen === "editor")) showScreen("auth");
+  }, [isLoaded, isSignedIn, guestMode, screen, showScreen]);
 
   const handleGoogleSignIn = useCallback(async () => {
     if (!signIn) return;
@@ -493,6 +494,11 @@ export default function Home() {
 
   const bakeAndDownload = useCallback(() => {
     if (exporting) return;
+    if (guestMode) {
+      setShowExport(false);
+      showScreen("auth");
+      return;
+    }
     setExporting(true);
     bakeImageToCanvas((canvas) => {
       canvas.toBlob((blob) => {
@@ -510,9 +516,14 @@ export default function Home() {
         setShowExport(false);
       }, "image/jpeg", 0.92);
     });
-  }, [bakeImageToCanvas, recordEdit, exporting]);
+  }, [bakeImageToCanvas, recordEdit, exporting, guestMode, showScreen]);
 
   const shareImage = useCallback(() => {
+    if (guestMode) {
+      setShowExport(false);
+      showScreen("auth");
+      return;
+    }
     bakeImageToCanvas((canvas) => {
       canvas.toBlob(async (blob) => {
         if (!blob) return;
@@ -527,7 +538,7 @@ export default function Home() {
         }
       }, "image/jpeg", 0.92);
     });
-  }, [bakeImageToCanvas, recordEdit]);
+  }, [bakeImageToCanvas, recordEdit, guestMode, showScreen]);
 
   const presetIdsInUse = new Set(layers.map((l) => l.presetId));
 
@@ -605,8 +616,11 @@ export default function Home() {
             {authError && <p style={{ color: "var(--danger)", fontSize: "12px", textAlign: "center", margin: "8px 0 0" }}>{authError}</p>}
           </div>
           <div className="auth-footer">
+            <button className="btn btn-ghost btn-block" onClick={() => { setGuestMode(true); showScreen("home"); }} style={{ marginBottom: "12px" }}>
+              Skip for now — try as guest
+            </button>
             <p className="fine">
-              By continuing you agree to tul&apos;s Terms &amp; Privacy.
+              Sign in to download your edits. Guest edits are saved locally.
             </p>
           </div>
         </div>
@@ -1113,6 +1127,11 @@ export default function Home() {
         <div className="modal-preview">
           {currentImage && <ImageWithSkeleton src={activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
         </div>
+        {guestMode && (
+          <p style={{ fontSize: "12px", color: "var(--ink-muted)", textAlign: "center", margin: "0 0 12px" }}>
+            Sign in to download. Edits are ready — they won&apos;t be lost.
+          </p>
+        )}
         <div className="modal-actions">
           <FadeIn show={exporting}>
             <Spinner size={16} />
