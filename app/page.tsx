@@ -251,11 +251,15 @@ export default function Home() {
   const handleGoogleSignIn = useCallback(async () => {
     if (!signIn) return;
     setAuthLoading(true);
+    setAuthError("");
     try {
-      await signIn.create({
+      const result: any = await signIn.create({
         strategy: "oauth_google",
         redirectUrl: window.location.href,
       });
+      const redirectUrl = result?.firstFactorVerification?.externalVerificationRedirectURL
+        || result?.verification?.externalVerificationRedirectURL;
+      if (redirectUrl) window.location.href = redirectUrl;
     } catch (err: any) {
       setAuthError(err?.errors?.[0]?.message || "Google sign-in failed.");
       setAuthLoading(false);
@@ -267,11 +271,14 @@ export default function Home() {
     setAuthLoading(true);
     setAuthError("");
     try {
-      const result = await signIn.create({ identifier: emailInput, password: passInput });
+      const result: any = await signIn.create({ identifier: emailInput, password: passInput });
       if (result.error) {
         setAuthError(result.error.message || "Check your email and password.");
+        setAuthLoading(false);
+        return;
       }
-      setAuthLoading(false);
+      try { await signIn.finalize(); } catch {}
+      window.location.reload();
     } catch (err: any) {
       setAuthError(err?.errors?.[0]?.message || "Sign-in failed.");
       setAuthLoading(false);
@@ -568,9 +575,27 @@ export default function Home() {
 
   if (!isLoaded) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)" }}>
-        <Spinner size={24} />
-      </div>
+      <>
+        <section className="screen screen-onboarding active" style={{ position: "relative" }}>
+          <InteractiveLines backgroundColor="rgb(10, 10, 10)" lineColor="rgba(255, 255, 255, 0.25)" lineWidth={0.7} minLines={4} maxLines={30} fade fadeIntensity={25} />
+          <div className="onboard-content">
+            <p className="onboard-logo">TUL</p>
+            <h1 className="onboard-h1">
+              Upload a photo.<br />
+              Pick a look.<br />
+              <em>Done.</em>
+            </h1>
+            <p className="onboard-lede">
+              No sliders to learn, no filters to fight with — just presets built
+              to make your photos better in one tap.
+            </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px" }}>
+              <Spinner size={16} />
+              <span style={{ fontSize: "13px", color: "var(--ink-muted)" }}>Loading…</span>
+            </div>
+          </div>
+        </section>
+      </>
     );
   }
 
