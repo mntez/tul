@@ -84,6 +84,10 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [guestMode, setGuestMode] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetStep, setResetStep] = useState<"email" | "code" | "password">("email");
+  const [resetCode, setResetCode] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [recentEdits, setRecentEdits] = useState<RecentEdit[]>([]);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
@@ -284,6 +288,61 @@ export default function Home() {
       setAuthLoading(false);
     }
   }, [signIn, emailInput, passInput]);
+
+  const handleSendResetCode = useCallback(async () => {
+    if (!signIn) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      await signIn.create({ identifier: emailInput });
+      await signIn.resetPasswordEmailCode.sendCode();
+      setResetStep("code");
+      setAuthLoading(false);
+    } catch (err: any) {
+      setAuthError(err?.errors?.[0]?.message || "Failed to send reset code.");
+      setAuthLoading(false);
+    }
+  }, [signIn, emailInput]);
+
+  const handleVerifyResetCode = useCallback(async () => {
+    if (!signIn) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      await signIn.resetPasswordEmailCode.verifyCode({ code: resetCode });
+      setResetStep("password");
+      setAuthLoading(false);
+    } catch (err: any) {
+      setAuthError(err?.errors?.[0]?.message || "Invalid code.");
+      setAuthLoading(false);
+    }
+  }, [signIn, resetCode]);
+
+  const handleResetPassword = useCallback(async () => {
+    if (!signIn) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      await signIn.resetPasswordEmailCode.submitPassword({ password: resetNewPassword });
+      setResetMode(false);
+      setResetStep("email");
+      setResetCode("");
+      setResetNewPassword("");
+      setAuthError("Password reset. Sign in with your new password.");
+      setAuthLoading(false);
+    } catch (err: any) {
+      setAuthError(err?.errors?.[0]?.message || "Failed to reset password.");
+      setAuthLoading(false);
+    }
+  }, [signIn, resetNewPassword]);
+
+  const handleCancelReset = useCallback(() => {
+    setResetMode(false);
+    setResetStep("email");
+    setResetCode("");
+    setResetNewPassword("");
+    setAuthError("");
+  }, []);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -640,27 +699,83 @@ export default function Home() {
               Continue with email
             </button>
             <div className={`email-fields ${emailFieldsOpen ? "open" : ""}`}>
-              <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} disabled={authLoading} />
-              <div style={{ position: "relative" }}>
-                <input className="field" type={showPassword ? "text" : "password"} placeholder="Password" value={passInput} onChange={(e) => setPassInput(e.target.value)} disabled={authLoading} style={{ paddingRight: "36px" }} />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-secondary)", display: "flex", alignItems: "center" }} tabIndex={-1}>
-                  {showPassword ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                      <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
-                      <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-              <button className="btn btn-primary btn-block" onClick={handleEmailSignIn} disabled={authLoading}>
-                {authLoading ? "Signing in..." : "Continue"}
-              </button>
+              {!resetMode ? (
+                <>
+                  <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} disabled={authLoading} />
+                  <div style={{ position: "relative" }}>
+                    <input className="field" type={showPassword ? "text" : "password"} placeholder="Password" value={passInput} onChange={(e) => setPassInput(e.target.value)} disabled={authLoading} style={{ paddingRight: "36px" }} />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-secondary)", display: "flex", alignItems: "center" }} tabIndex={-1}>
+                      {showPassword ? (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
+                          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  <button className="btn btn-primary btn-block" onClick={handleEmailSignIn} disabled={authLoading}>
+                    {authLoading ? "Signing in..." : "Continue"}
+                  </button>
+                  <button className="link-quiet" onClick={() => { setResetMode(true); setResetStep("email"); setAuthError(""); }} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
+                    Forgot password?
+                  </button>
+                </>
+              ) : resetStep === "email" ? (
+                <>
+                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Enter your email to receive a reset code.</p>
+                  <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} disabled={authLoading} />
+                  <button className="btn btn-primary btn-block" onClick={handleSendResetCode} disabled={authLoading}>
+                    {authLoading ? "Sending..." : "Send reset code"}
+                  </button>
+                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
+                    Back to sign in
+                  </button>
+                </>
+              ) : resetStep === "code" ? (
+                <>
+                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Check your email for the reset code.</p>
+                  <input className="field" type="text" placeholder="Reset code" value={resetCode} onChange={(e) => setResetCode(e.target.value)} disabled={authLoading} />
+                  <button className="btn btn-primary btn-block" onClick={handleVerifyResetCode} disabled={authLoading}>
+                    {authLoading ? "Verifying..." : "Verify code"}
+                  </button>
+                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
+                    Back to sign in
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Enter your new password.</p>
+                  <div style={{ position: "relative" }}>
+                    <input className="field" type={showPassword ? "text" : "password"} placeholder="New password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} disabled={authLoading} style={{ paddingRight: "36px" }} />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-secondary)", display: "flex", alignItems: "center" }} tabIndex={-1}>
+                      {showPassword ? (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
+                          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  <button className="btn btn-primary btn-block" onClick={handleResetPassword} disabled={authLoading}>
+                    {authLoading ? "Resetting..." : "Reset password"}
+                  </button>
+                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
+                    Back to sign in
+                  </button>
+                </>
+              )}
             </div>
             {authError && <p style={{ color: "var(--danger)", fontSize: "12px", textAlign: "center", margin: "8px 0 0" }}>{authError}</p>}
           </div>
