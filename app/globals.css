@@ -1173,6 +1173,33 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
 }
 
+/* ── Skeleton / Spinner ── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--border) 50%, var(--bg-elevated) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+.img-skeleton-wrap {
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.img-loading { opacity: 0; }
+.img-loaded { opacity: 1; transition: opacity 0.3s ease; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.spinner { animation: spin 0.8s linear infinite; }
+
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Bottom Export Bar */
 .export-bar {
   flex-shrink: 0;

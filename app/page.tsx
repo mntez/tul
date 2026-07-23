@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import InteractiveLines from "./interactive-lines";
+import { ImageWithSkeleton, Skeleton, Spinner, FadeIn } from "./animations";
 import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HALFTONE_MAP_OPTIONS, HalftoneSettings } from "./halftone";
 import {
   applyPixelate, DEFAULT_PIXELATE,
@@ -78,6 +79,7 @@ export default function Home() {
   const [layers, setLayers] = useState<EffectLayer[]>([]);
   const [compare, setCompare] = useState<"edited" | "original">("edited");
   const [showExport, setShowExport] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [emailFieldsOpen, setEmailFieldsOpen] = useState(false);
   const [emailInput, setEmailInput] = useState("");
   const [passInput, setPassInput] = useState("");
@@ -316,9 +318,11 @@ export default function Home() {
   );
 
   const bakeAndDownload = useCallback(() => {
+    if (exporting) return;
+    setExporting(true);
     bakeImageToCanvas((canvas) => {
       canvas.toBlob((blob) => {
-        if (!blob) return;
+        if (!blob) { setExporting(false); return; }
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -328,10 +332,11 @@ export default function Home() {
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         recordEdit();
+        setExporting(false);
         setShowExport(false);
       }, "image/jpeg", 0.92);
     });
-  }, [bakeImageToCanvas, recordEdit]);
+  }, [bakeImageToCanvas, recordEdit, exporting]);
 
   const shareImage = useCallback(() => {
     bakeImageToCanvas((canvas) => {
@@ -689,10 +694,10 @@ export default function Home() {
             <div className="preview-header">Preview</div>
             <div className="preview-content">
               {currentImage ? (
-                <img
+                <ImageWithSkeleton
                   src={compare === "original" ? currentImage.src : (activeEffect && effectResultSrc ? effectResultSrc : currentImage.src)}
                   alt="Final output"
-                  style={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
+                  imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }}
                 />
               ) : (
                 <span className="preview-empty">No image selected</span>
@@ -716,7 +721,7 @@ export default function Home() {
               {currentImage ? (
                 <div className="source-info">
                   <div className="source-thumb">
-                    <img src={currentImage.src} alt="" />
+                    <ImageWithSkeleton src={currentImage.src} alt="" />
                   </div>
                   <div className="source-name">{currentImage.name}</div>
                 </div>
@@ -841,14 +846,14 @@ export default function Home() {
       <div className={`modal-backdrop ${showExport ? "show" : ""}`} onClick={() => setShowExport(false)} />
       <div className={`modal ${showExport ? "show" : ""}`}>
         <div className="modal-preview">
-          {currentImage && <img src={activeEffect && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" style={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
+          {currentImage && <ImageWithSkeleton src={activeEffect && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
         </div>
         <div className="modal-actions">
-          <button className="btn btn-primary" onClick={bakeAndDownload}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3v12" /><path d="M8 11l4 4 4-4" /><path d="M5 19h14" />
-            </svg>
-            Download
+          <FadeIn show={exporting}>
+            <Spinner size={16} />
+          </FadeIn>
+          <button className="btn btn-primary" onClick={bakeAndDownload} disabled={exporting}>
+            {exporting ? "Exporting..." : "Download"}
           </button>
           <button className="btn btn-outline" onClick={shareImage}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
