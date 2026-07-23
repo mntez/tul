@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useUser, useAuth, SignIn, UserButton } from "@clerk/nextjs";
 import InteractiveLines from "./interactive-lines";
 import { ImageWithSkeleton, Skeleton, Spinner, FadeIn } from "./animations";
 import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HALFTONE_MAP_OPTIONS, HalftoneSettings } from "./halftone";
@@ -73,16 +74,14 @@ interface RecentEdit {
 
 export default function Home() {
   const [screen, setScreen] = useState<"onboarding" | "auth" | "home" | "editor">("onboarding");
-  const [user, setUser] = useState<{ name: string } | null>(null);
+  const { isSignedIn, user, isLoaded } = useUser();
+  const { signOut } = useAuth();
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [recentEdits, setRecentEdits] = useState<RecentEdit[]>([]);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
   const [compare, setCompare] = useState<"edited" | "original">("edited");
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [emailFieldsOpen, setEmailFieldsOpen] = useState(false);
-  const [emailInput, setEmailInput] = useState("");
-  const [passInput, setPassInput] = useState("");
   const [sidebarTab, setSidebarTab] = useState<"presets" | "effects">("presets");
   const [userPresets, setUserPresets] = useState<UserPreset[]>([]);
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
@@ -209,16 +208,22 @@ export default function Home() {
     setScreen(id);
   }, []);
 
-  const mockLogin = useCallback((name: string) => {
-    const userName = name === "Guest" ? "Guest" : emailInput || name;
-    setUser({ name: userName });
-    showScreen("home");
-  }, [emailInput, showScreen]);
+  useEffect(() => {
+    if (isLoaded && isSignedIn && screen === "auth") showScreen("home");
+  }, [isLoaded, isSignedIn, screen, showScreen]);
 
-  const logout = useCallback(() => {
-    setUser(null);
-    showScreen("auth");
-  }, [showScreen]);
+  // Redirect to auth if not signed in on protected screens
+  useEffect(() => {
+    if (isLoaded && !isSignedIn && (screen === "home" || screen === "editor")) showScreen("auth");
+  }, [isLoaded, isSignedIn, screen, showScreen]);
+
+  if (!isLoaded) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "var(--bg)" }}>
+        <Spinner size={24} />
+      </div>
+    );
+  }
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -512,7 +517,7 @@ export default function Home() {
             No sliders to learn, no filters to fight with — just presets built
             to make your photos better in one tap.
           </p>
-          <button className="btn btn-primary" onClick={() => showScreen("auth")} style={{ padding: "12px 32px", fontSize: "15px" }}>
+          <button className="btn btn-primary" onClick={() => showScreen(isSignedIn ? "home" : "auth")} style={{ padding: "12px 32px", fontSize: "15px" }}>
             Get started
           </button>
         </div>
@@ -524,32 +529,7 @@ export default function Home() {
             <span className="wordmark">tul</span>
             <p>edit photos, have fun</p>
           </div>
-          <div className="auth-actions">
-            <button className="btn btn-primary btn-block" onClick={() => mockLogin("Google")}>
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M21.6 12.23c0-.68-.06-1.36-.18-2H12v3.79h5.4a4.6 4.6 0 01-2 3.02v2.5h3.24c1.9-1.75 3-4.32 3-7.31z" fill="#fff" />
-                <path d="M12 22c2.7 0 4.97-.9 6.63-2.44l-3.24-2.5c-.9.6-2.06.96-3.39.96-2.6 0-4.8-1.76-5.6-4.12H3.05v2.58A10 10 0 0012 22z" fill="#fff" opacity=".8" />
-                <path d="M6.4 13.9a5.98 5.98 0 010-3.8V7.52H3.05a10 10 0 000 8.96l3.35-2.58z" fill="#fff" opacity=".6" />
-                <path d="M12 5.98c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.96 9.96 0 0012 2a10 10 0 00-8.95 5.52L6.4 10.1c.8-2.36 3-4.12 5.6-4.12z" fill="#fff" opacity=".9" />
-              </svg>
-              Continue with Google
-            </button>
-            <button className="btn btn-outline btn-block" onClick={() => setEmailFieldsOpen(!emailFieldsOpen)}>
-              Continue with email
-            </button>
-            <div className={`email-fields ${emailFieldsOpen ? "open" : ""}`}>
-              <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} />
-              <input className="field" type="password" placeholder="Password" value={passInput} onChange={(e) => setPassInput(e.target.value)} />
-              <button className="btn btn-primary btn-block" onClick={() => mockLogin("you")}>Continue</button>
-            </div>
-          </div>
-          <div className="auth-footer">
-            <button className="link-quiet" onClick={() => mockLogin("Guest")}>Skip for now — try it as a guest</button>
-            <p className="fine">
-              By continuing you agree to tul&apos;s Terms &amp; Privacy.<br />
-              This demo signs you in locally — no account is created.
-            </p>
-          </div>
+          <SignIn routing="hash" signUpUrl="#" />
         </div>
       </section>
 
@@ -559,9 +539,7 @@ export default function Home() {
             <span className="wordmark">tul</span>
           </div>
           <div className="top-nav-right">
-            <button className="avatar" onClick={logout} title="Sign out">
-              {(user?.name || "?").trim().charAt(0).toUpperCase()}
-            </button>
+            <UserButton />
           </div>
         </nav>
         <div className="home-content">
@@ -611,9 +589,7 @@ export default function Home() {
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" />
               </svg>
             </button>
-            <button className="avatar" onClick={logout} title="Sign out">
-              {(user?.name || "?").trim().charAt(0).toUpperCase()}
-            </button>
+            <UserButton />
           </div>
         </nav>
 
