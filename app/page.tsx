@@ -279,6 +279,28 @@ export default function Home() {
     });
   }, []);
 
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  const handleDragStart = useCallback((index: number) => {
+    setDragIndex(index);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === index) return;
+    setLayers((prev) => {
+      const arr = [...prev];
+      const [removed] = arr.splice(dragIndex, 1);
+      arr.splice(index, 0, removed);
+      return arr;
+    });
+    setDragIndex(index);
+  }, [dragIndex]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragIndex(null);
+  }, []);
+
   const recordEdit = useCallback(() => {
     if (!currentImage) return;
     setRecentEdits((prev) => [
@@ -753,10 +775,17 @@ export default function Home() {
                     const layerPreset = builtin || user;
                     const layerName = builtin?.name || user?.name || layer.presetId;
                     return (
-                      <div key={layer.id} className={`layer-item ${!layer.enabled ? "layer-disabled" : ""}`}>
+                      <div
+                        key={layer.id}
+                        className={`layer-item ${!layer.enabled ? "layer-disabled" : ""} ${dragIndex === i ? "layer-dragging" : ""}`}
+                        draggable
+                        onDragStart={() => handleDragStart(i)}
+                        onDragOver={(e) => handleDragOver(e, i)}
+                        onDragEnd={handleDragEnd}
+                      >
                         <div className="layer-top">
                           <div className="layer-left">
-                            <span className="layer-index">{i + 1}</span>
+                            <span className="layer-index layer-grip">{i + 1}</span>
                             <div className="layer-thumb-small">
                               {currentImage && (
                                 <img src={currentImage.src} alt="" style={{ filter: resolvePresetFilter(layer.presetId, layer.intensity) }} />
