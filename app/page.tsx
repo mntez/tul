@@ -53,17 +53,60 @@ export default function Home() {
   const [activeEffects, setActiveEffects] = useState<EffectId[]>([]);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [panning, setPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [imgNatural, setImgNatural] = useState({ w: 0, h: 0 });
+
+  const zoomToFit = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp || !imgNatural.w) return;
+    const r = vp.getBoundingClientRect();
+    const f = Math.min(r.width / imgNatural.w, r.height / imgNatural.h) * 0.95;
+    setZoom(f);
+    setPanX((r.width - imgNatural.w * f) / 2);
+    setPanY((r.height - imgNatural.h * f) / 2);
+  }, [imgNatural]);
+
+  const zoomIn = useCallback(() => {
+    const levels = [-1, 0.1, 0.25, 0.33, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+    setZoom((z) => { for (const l of levels) if (l > z) return l; return z; });
+  }, []);
+
+  const zoomOut = useCallback(() => {
+    const levels = [-1, 0.1, 0.25, 0.33, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+    setZoom((z) => { for (let i = levels.length - 1; i >= 0; i--) if (levels[i] < z && levels[i] > 0) return levels[i]; return 0.1; });
+  }, []);
+
+  const zoomOneToOne = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const r = vp.getBoundingClientRect();
+    setZoom(1);
+    setPanX((r.width - imgNatural.w) / 2);
+    setPanY((r.height - imgNatural.h) / 2);
+  }, [imgNatural]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
-  }, []);
+    e.preventDefault();
+    if (e.deltaY < 0) zoomIn(); else zoomOut();
+  }, [zoomIn, zoomOut]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-  }, []);
+    setPanning(true);
+    setPanStart({ x: e.clientX - panX, y: e.clientY - panY });
+  }, [panX, panY]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-  }, []);
+    if (!panning) return;
+    setPanX(e.clientX - panStart.x);
+    setPanY(e.clientY - panStart.y);
+  }, [panning, panStart]);
 
-  const handleMouseUp = useCallback(() => { }, []);
+  const handleMouseUp = useCallback(() => { setPanning(false); }, []);
   const layersRef = useRef(layers);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   const [undoStack, setUndoStack] = useState<EffectLayer[][]>([]);
@@ -181,6 +224,7 @@ export default function Home() {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
       setLayers([]);
       setCompare("edited");
+      setImgNatural({ w: 0, h: 0 });
       showScreen("editor");
     };
     reader.readAsDataURL(file);
@@ -774,16 +818,50 @@ export default function Home() {
           <aside className="editor-preview">
             <div className="preview-header">
               <span>Preview</span>
+              {currentImage && (
+                <div className="zoom-controls">
+                  <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
+                  <span className="zoom-label">{`${Math.round(zoom * 100)}%`}</span>
+                  <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
+                  <button className="icon-btn zoom-btn" onClick={zoomToFit} title="Fit to container">⊡</button>
+                  <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
+                </div>
+              )}
             </div>
-            <div
-              className="preview-content"
-            >
+            <div className="preview-content" style={{ position: "relative" }}>
               {currentImage ? (
-                <img
-                  src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
-                  alt="Final output"
-                  style={{ filter: compare === "edited" ? getCombinedFilterString() : "none", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-                />
+                <div ref={viewportRef} style={{ position: "absolute", inset: 0, overflow: "hidden", cursor: panning ? "grabbing" : "grab" }}
+                  onWheel={handleWheel}
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                >
+                  <img
+                    src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
+                    alt="Final output"
+                    draggable={false}
+                    onLoad={(e) => {
+                      const n = e.currentTarget;
+                      setImgNatural({ w: n.naturalWidth, h: n.naturalHeight });
+                      const vp = viewportRef.current;
+                      if (!vp) return;
+                      const r = vp.getBoundingClientRect();
+                      const f = Math.min(r.width / n.naturalWidth, r.height / n.naturalHeight) * 0.95;
+                      setZoom(f);
+                      setPanX((r.width - n.naturalWidth * f) / 2);
+                      setPanY((r.height - n.naturalHeight * f) / 2);
+                    }}
+                    style={{
+                      filter: compare === "edited" ? getCombinedFilterString() : "none",
+                      display: "block",
+                      maxWidth: "none",
+                      maxHeight: "none",
+                      transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+                      transformOrigin: "0 0",
+                    }}
+                  />
+                </div>
               ) : (
                 <span className="preview-empty">No image selected</span>
               )}
