@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import InteractiveLines from "./interactive-lines";
-import { ImageWithSkeleton, Skeleton, Spinner, FadeIn } from "./animations";
+import { ImageWithSkeleton, Spinner, FadeIn } from "./animations";
 import {
   applyPixelate, DEFAULT_PIXELATE,
   applyGlitch, DEFAULT_GLITCH,
@@ -33,12 +33,13 @@ import EffectSliderControls from "./components/editor/EffectControls";
 export default function Home() {
   const [screen, setScreen] = useState<ScreenId>("onboarding");
   const { isLoaded: userLoaded, isSignedIn: clerkSignedIn } = useUser();
-  const [mounted, setMounted] = useState(false);
   const isSignedIn = userLoaded && !!clerkSignedIn;
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (userLoaded && clerkSignedIn) {
+      setScreen((s) => s === "onboarding" ? "home" : s);
+    }
+  }, [userLoaded, clerkSignedIn]);
   const [guestMode, setGuestMode] = useState(false);
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
@@ -521,7 +522,15 @@ export default function Home() {
   return (
     <>
       <section className={`screen screen-onboarding ${screen === "onboarding" ? "active" : ""}`} style={{ position: "relative" }}>
+        {!userLoaded ? (
+          <div className="onboard-loading">
+            <p className="onboard-logo">TUL</p>
+            <Spinner size={18} />
+          </div>
+        ) : (
         <InteractiveLines backgroundColor="rgb(10, 10, 10)" lineColor="rgba(255, 255, 255, 0.25)" lineWidth={0.7} minLines={4} maxLines={30} fade fadeIntensity={25} />
+        )}
+        {userLoaded && (
         <div className="onboard-content">
           <p className="onboard-logo">TUL</p>
           <h1 className="onboard-h1">
@@ -537,6 +546,7 @@ export default function Home() {
             Get started
           </button>
         </div>
+        )}
       </section>
 
       <section className={`screen screen-auth ${screen === "auth" ? "active" : ""}`}>
