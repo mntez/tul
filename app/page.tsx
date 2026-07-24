@@ -52,6 +52,11 @@ export default function Home() {
   const [activeEffects, setActiveEffects] = useState<EffectId[]>([]);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [exportFormat, setExportFormat] = useState("jpeg");
+  const [exportQuality, setExportQuality] = useState(92);
+  const [fileSize, setFileSize] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
@@ -213,9 +218,9 @@ export default function Home() {
     } catch {}
   }, [guestMode, layers]);
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const loadImageFile = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    setFileSize(file.size);
     const reader = new FileReader();
     reader.onload = (ev) => {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
@@ -225,8 +230,34 @@ export default function Home() {
       showScreen("editor");
     };
     reader.readAsDataURL(file);
-    e.target.value = "";
   }, [showScreen]);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    loadImageFile(file);
+    e.target.value = "";
+  }, [loadImageFile]);
+
+  const handleFileDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) loadImageFile(file);
+  }, [loadImageFile]);
 
   const saveCurrentAsPreset = useCallback(() => {
     const enabled = layers.filter((l) => l.enabled);
@@ -282,9 +313,12 @@ export default function Home() {
   }, [applySingleEffect]);
 
   useEffect(() => {
-    if (!currentImage || activeEffects.length === 0) { setEffectResultSrc(null); return; }
+    if (!currentImage || activeEffects.length === 0) { setEffectResultSrc(null); setProcessing(false); return; }
+    setProcessing(true);
+    let cancelled = false;
     const img = new Image();
     img.onload = () => {
+      if (cancelled) return;
       const c = document.createElement("canvas");
       c.width = img.naturalWidth;
       c.height = img.naturalHeight;
@@ -293,9 +327,10 @@ export default function Home() {
       const imageData = ctx.getImageData(0, 0, c.width, c.height);
       const result = chainEffects(imageData, activeEffects);
       ctx.putImageData(result, 0, 0);
-      setEffectResultSrc(c.toDataURL());
+      if (!cancelled) { setEffectResultSrc(c.toDataURL()); setProcessing(false); }
     };
     img.src = currentImage.src;
+    return () => { cancelled = true; };
   }, [currentImage, activeEffects, effectSettings]);
 
   const userPresetFilter = useCallback((preset: UserPreset, intensity: number) => {
@@ -441,21 +476,24 @@ export default function Home() {
     }
     setExporting(true);
     bakeImageToCanvas((canvas) => {
+      const ext = exportFormat === "jpeg" ? "jpg" : exportFormat;
+      const mime = exportFormat === "jpeg" ? "image/jpeg" : exportFormat === "png" ? "image/png" : "image/webp";
+      const quality = exportFormat === "png" ? undefined : exportQuality / 100;
       canvas.toBlob((blob) => {
         if (!blob) { setExporting(false); return; }
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "tul-edit.jpg";
+        a.download = `tul-edit.${ext}`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
         setExporting(false);
         setShowExport(false);
-      }, "image/jpeg", 0.92);
+      }, mime, quality);
     });
-  }, [bakeImageToCanvas, exporting, guestMode, showScreen]);
+  }, [bakeImageToCanvas, exporting, guestMode, showScreen, exportFormat, exportQuality]);
 
   const shareImage = useCallback(() => {
     if (guestMode) {
@@ -519,7 +557,13 @@ export default function Home() {
           </div>
         </nav>
         <div className="home-content">
-          <div className="upload-card" onClick={() => fileInputRef.current?.click()}>
+          <div
+            className={`upload-card ${isDragging ? "drag-over" : ""}`}
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={handleFileDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <div className="icon-circle">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 16V4" /><path d="M6 10l6-6 6 6" /><path d="M4 20h16" />
@@ -775,15 +819,23 @@ export default function Home() {
           <aside className="editor-preview">
             <div className="preview-header">
               <span>Preview</span>
-              {currentImage && (
-                <div className="zoom-controls">
-                  <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
-                  <span className="zoom-label">{`${Math.round(zoom * 100)}%`}</span>
-                  <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
-                  <button className="icon-btn zoom-btn" onClick={zoomToFit} title="Fit to container">⊡</button>
-                  <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
-                </div>
-              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {processing && <Spinner size={14} />}
+                {currentImage && imgNatural.w > 0 && (
+                  <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>
+                    {imgNatural.w}×{imgNatural.h}{fileSize > 0 ? ` · ${(fileSize / 1024 / 1024).toFixed(1)}MB` : ""}
+                  </span>
+                )}
+                {currentImage && (
+                  <div className="zoom-controls">
+                    <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
+                    <span className="zoom-label">{`${Math.round(zoom * 100)}%`}</span>
+                    <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
+                    <button className="icon-btn zoom-btn" onClick={zoomToFit} title="Fit to container">⊡</button>
+                    <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="preview-content" style={{ position: "relative" }}>
               {currentImage ? (
@@ -846,7 +898,7 @@ export default function Home() {
                   <div className="source-name">{currentImage.name}</div>
                 </div>
               ) : (
-                <div className="upload-zone" onClick={() => fileInputRef.current?.click()}>
+                <div className={`upload-zone ${isDragging ? "drag-over" : ""}`} onClick={() => fileInputRef.current?.click()} onDragOver={handleFileDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 16V4" /><path d="M6 10l6-6 6 6" /><path d="M4 20h16" />
                   </svg>
@@ -954,9 +1006,10 @@ export default function Home() {
                             </div>
                           </div>
                           <div className="layer-actions">
-                            <button className="icon-btn" onClick={() => toggleEffect(effId)} title="Remove effect">
+                            <button className="icon-btn" onClick={() => toggleEffect(effId)} title="Toggle effect">
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-muted)" }}>
-                                <path d="M18 6L6 18" /><path d="M6 6l12 12" />
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                                <circle cx="12" cy="12" r="3" />
                               </svg>
                             </button>
                           </div>
@@ -973,17 +1026,14 @@ export default function Home() {
         <div className="export-bar">
           <div className="export-left">
             <span style={{ fontSize: "13px", color: "var(--ink-muted)" }}>Export as</span>
-            <select className="export-select" defaultValue="jpeg">
+            <select className="export-select" value={exportFormat} onChange={(e) => setExportFormat(e.target.value)}>
               <option value="jpeg">JPEG</option>
               <option value="png">PNG</option>
               <option value="webp">WebP</option>
             </select>
             <span style={{ fontSize: "13px", color: "var(--ink-muted)" }}>Quality</span>
-            <select className="export-select" defaultValue="92">
-              <option value="80">Standard</option>
-              <option value="92">High</option>
-              <option value="100">Maximum</option>
-            </select>
+            <input type="range" min="10" max="100" value={exportQuality} onChange={(e) => setExportQuality(Number(e.target.value))} style={{ width: 100 }} />
+            <span style={{ fontSize: "12px", color: "var(--ink-secondary)", minWidth: 28 }}>{exportQuality}%</span>
           </div>
           <div className="export-right">
             <button className="btn btn-ghost" onClick={() => { if (!currentImage) { fileInputRef.current?.click(); return; } setShowExport(true); }}>

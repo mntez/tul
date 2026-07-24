@@ -1023,6 +1023,12 @@ input[type="range"]::-moz-range-thumb {
   transition: border-color var(--transition), background var(--transition);
 }
 
+.upload-zone.drag-over,
+.upload-card.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
 .upload-zone:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
