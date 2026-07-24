@@ -1,7 +1,7 @@
+import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Instrument_Sans, Instrument_Serif } from "next/font/google";
-import { ClerkProvider } from "@clerk/nextjs";
 import Providers from "./providers";
 import "./globals.css";
 

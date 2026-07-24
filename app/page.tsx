@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useUser, useAuth, useSignIn, UserButton } from "@clerk/nextjs";
+import { UserButton, useUser } from "@clerk/nextjs";
 import InteractiveLines from "./interactive-lines";
 import { ImageWithSkeleton, Skeleton, Spinner, FadeIn } from "./animations";
-import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HALFTONE_MAP_OPTIONS, HalftoneSettings } from "./halftone";
 import {
   applyPixelate, DEFAULT_PIXELATE,
   applyGlitch, DEFAULT_GLITCH,
@@ -13,7 +12,7 @@ import {
   applyNoise, DEFAULT_NOISE,
   applyKaleidoscope, DEFAULT_KALEIDOSCOPE,
   applyRipple, DEFAULT_RIPPLE,
-  applyASCII, DEFAULT_ASCII, ASCII_CHARSET_OPTIONS,
+  applyASCII, DEFAULT_ASCII,
   applyReceipt, DEFAULT_RECEIPT,
   applyMotionBlur, DEFAULT_MOTION_BLUR,
   applyRadialBlur, DEFAULT_RADIAL_BLUR,
@@ -23,71 +22,24 @@ import {
   applyMotionTrail, DEFAULT_MOTION_TRAIL,
   applyBloom, DEFAULT_BLOOM,
   applyEmboss, DEFAULT_EMBOSS,
-  EFFECTS, EffectId,
+  EFFECTS, EffectId, ASCII_CHARSET_OPTIONS,
 } from "./effects";
-
-const PRESETS = [
-  { id: "original", name: "Original", filter: () => "none" },
-  { id: "mono", name: "Mono", filter: (i: number) => `grayscale(${i}%) contrast(${100 + i * 0.15}%)` },
-  { id: "noir", name: "Noir", filter: (i: number) => `grayscale(${i}%) contrast(${100 + i * 0.35}%) brightness(${100 - i * 0.1}%)` },
-  { id: "warm", name: "Warm", filter: (i: number) => `sepia(${i * 0.4}%) saturate(${100 + i * 0.35}%) brightness(${100 + i * 0.05}%)` },
-  { id: "cool", name: "Cool", filter: (i: number) => `hue-rotate(${i * 1.8}deg) saturate(${100 - i * 0.1}%) brightness(${100 + i * 0.08}%)` },
-  { id: "fade", name: "Fade", filter: (i: number) => `contrast(${100 - i * 0.25}%) brightness(${100 + i * 0.15}%) saturate(${100 - i * 0.35}%)` },
-  { id: "vivid", name: "Vivid", filter: (i: number) => `saturate(${100 + i * 0.6}%) contrast(${100 + i * 0.15}%)` },
-];
-
-const PRESET_CATEGORIES = [
-  { name: "B&W", ids: ["mono", "noir"] },
-  { name: "Color", ids: ["warm", "cool", "vivid"] },
-  { name: "Mood", ids: ["fade"] },
-];
-
-interface EffectLayer {
-  id: string;
-  presetId: string;
-  intensity: number;
-  enabled: boolean;
-}
-
-interface UserPreset {
-  id: string;
-  name: string;
-  filters: Record<string, number>;
-}
-
-interface SavedPreset {
-  id: string;
-  name: string;
-  layers: { presetId: string; intensity: number }[];
-}
-
-interface CurrentImage {
-  src: string;
-  name: string;
-}
-
-interface RecentEdit {
-  id: number;
-  src: string;
-  layers: EffectLayer[];
-}
+import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HalftoneSettings, HALFTONE_MAP_OPTIONS } from "./halftone";
+import { PRESETS, PRESET_CATEGORIES } from "./presets";
+import type { EffectLayer, UserPreset, SavedPreset, CurrentImage, RecentEdit, ScreenId } from "./types";
+import AuthCard from "./components/auth/AuthCard";
+import EffectSliderControls from "./components/editor/EffectControls";
 
 export default function Home() {
-  const [screen, setScreen] = useState<"onboarding" | "auth" | "home" | "editor">("onboarding");
-  const { isSignedIn, user, isLoaded } = useUser();
-  const { signOut } = useAuth();
-  const { signIn } = useSignIn();
-  const [emailFieldsOpen, setEmailFieldsOpen] = useState(false);
-  const [emailInput, setEmailInput] = useState("");
-  const [passInput, setPassInput] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
+  const [screen, setScreen] = useState<ScreenId>("onboarding");
+  const { isLoaded: userLoaded, isSignedIn: clerkSignedIn } = useUser();
+  const [mounted, setMounted] = useState(false);
+  const isSignedIn = userLoaded && !!clerkSignedIn;
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const [guestMode, setGuestMode] = useState(false);
-  const [resetMode, setResetMode] = useState(false);
-  const [resetStep, setResetStep] = useState<"email" | "code" | "password">("email");
-  const [resetCode, setResetCode] = useState("");
-  const [resetNewPassword, setResetNewPassword] = useState("");
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [recentEdits, setRecentEdits] = useState<RecentEdit[]>([]);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
@@ -101,52 +53,17 @@ export default function Home() {
   const [activeEffects, setActiveEffects] = useState<EffectId[]>([]);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(-1);
-  const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
-  const [panning, setPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const previewRef = useRef<HTMLDivElement>(null);
-
-  const zoomIn = useCallback(() => {
-    setZoom((z) => {
-      if (z < 0) return 1;
-      const levels = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
-      for (const l of levels) if (l > z) return l;
-      return z;
-    });
-  }, []);
-
-  const zoomOut = useCallback(() => {
-    setZoom((z) => {
-      if (z < 0) return -1;
-      const levels = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
-      for (let i = levels.length - 1; i >= 0; i--) if (levels[i] < z) return levels[i];
-      return 0.25;
-    });
-  }, []);
-
-  const zoomReset = useCallback(() => { setZoom(-1); setPanX(0); setPanY(0); }, []);
-
-  const zoomOneToOne = useCallback(() => { setZoom(1); setPanX(0); setPanY(0); }, []);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (e.deltaY < 0) zoomIn(); else zoomOut();
-  }, [zoomIn, zoomOut]);
+  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (zoom < 0) return;
-    setPanning(true);
-    setPanStart({ x: e.clientX - panX, y: e.clientY - panY });
-  }, [zoom, panX, panY]);
+  }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!panning) return;
-    setPanX(e.clientX - panStart.x);
-    setPanY(e.clientY - panStart.y);
-  }, [panning, panStart]);
+  }, []);
 
-  const handleMouseUp = useCallback(() => { setPanning(false); }, []);
+  const handleMouseUp = useCallback(() => { }, []);
   const layersRef = useRef(layers);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   const [undoStack, setUndoStack] = useState<EffectLayer[][]>([]);
@@ -216,18 +133,22 @@ export default function Home() {
   }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const showScreen = useCallback((id: "onboarding" | "auth" | "home" | "editor") => {
+  const showScreen = useCallback((id: ScreenId) => {
     setScreen(id);
   }, []);
 
   useEffect(() => {
-    if (isLoaded && isSignedIn && screen === "auth") showScreen("home");
-  }, [isLoaded, isSignedIn, screen, showScreen]);
+    if (isSignedIn && screen === "auth") showScreen("home");
+  }, [isSignedIn, screen, showScreen]);
+
+  useEffect(() => {
+    if (isSignedIn && guestMode) setGuestMode(false);
+  }, [isSignedIn, guestMode]);
 
   // Redirect to auth if not signed in on protected screens
   useEffect(() => {
-    if (isLoaded && !isSignedIn && !guestMode && (screen === "home" || screen === "editor")) showScreen("auth");
-  }, [isLoaded, isSignedIn, guestMode, screen, showScreen]);
+    if (!isSignedIn && !guestMode && (screen === "home" || screen === "editor")) showScreen("auth");
+  }, [isSignedIn, guestMode, screen, showScreen]);
 
   // Load persisted state on mount
   useEffect(() => {
@@ -252,98 +173,6 @@ export default function Home() {
     } catch {}
   }, [guestMode, layers, recentEdits]);
 
-  const handleGoogleSignIn = useCallback(async () => {
-    if (!signIn) return;
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      const result: any = await signIn.create({
-        strategy: "oauth_google",
-        redirectUrl: window.location.href,
-      });
-      const redirectUrl = result?.firstFactorVerification?.externalVerificationRedirectURL
-        || result?.verification?.externalVerificationRedirectURL;
-      if (redirectUrl) window.location.href = redirectUrl;
-    } catch (err: any) {
-      setAuthError(err?.errors?.[0]?.message || "Google sign-in failed.");
-      setAuthLoading(false);
-    }
-  }, [signIn]);
-
-  const handleEmailSignIn = useCallback(async () => {
-    if (!signIn) return;
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      const result: any = await signIn.create({ identifier: emailInput, password: passInput });
-      if (result.error) {
-        setAuthError(result.error.message || "Check your email and password.");
-        setAuthLoading(false);
-        return;
-      }
-      try { await signIn.finalize(); } catch {}
-      window.location.reload();
-    } catch (err: any) {
-      setAuthError(err?.errors?.[0]?.message || "Sign-in failed.");
-      setAuthLoading(false);
-    }
-  }, [signIn, emailInput, passInput]);
-
-  const handleSendResetCode = useCallback(async () => {
-    if (!signIn) return;
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      await signIn.create({ identifier: emailInput });
-      await signIn.resetPasswordEmailCode.sendCode();
-      setResetStep("code");
-      setAuthLoading(false);
-    } catch (err: any) {
-      setAuthError(err?.errors?.[0]?.message || "Failed to send reset code.");
-      setAuthLoading(false);
-    }
-  }, [signIn, emailInput]);
-
-  const handleVerifyResetCode = useCallback(async () => {
-    if (!signIn) return;
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      await signIn.resetPasswordEmailCode.verifyCode({ code: resetCode });
-      setResetStep("password");
-      setAuthLoading(false);
-    } catch (err: any) {
-      setAuthError(err?.errors?.[0]?.message || "Invalid code.");
-      setAuthLoading(false);
-    }
-  }, [signIn, resetCode]);
-
-  const handleResetPassword = useCallback(async () => {
-    if (!signIn) return;
-    setAuthLoading(true);
-    setAuthError("");
-    try {
-      await signIn.resetPasswordEmailCode.submitPassword({ password: resetNewPassword });
-      setResetMode(false);
-      setResetStep("email");
-      setResetCode("");
-      setResetNewPassword("");
-      setAuthError("Password reset. Sign in with your new password.");
-      setAuthLoading(false);
-    } catch (err: any) {
-      setAuthError(err?.errors?.[0]?.message || "Failed to reset password.");
-      setAuthLoading(false);
-    }
-  }, [signIn, resetNewPassword]);
-
-  const handleCancelReset = useCallback(() => {
-    setResetMode(false);
-    setResetStep("email");
-    setResetCode("");
-    setResetNewPassword("");
-    setAuthError("");
-  }, []);
-
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -352,9 +181,6 @@ export default function Home() {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
       setLayers([]);
       setCompare("edited");
-      setZoom(0.25);
-      setPanX(0);
-      setPanY(0);
       showScreen("editor");
     };
     reader.readAsDataURL(file);
@@ -632,32 +458,6 @@ export default function Home() {
 
   const presetIdsInUse = new Set(layers.map((l) => l.presetId));
 
-  if (!isLoaded) {
-    return (
-      <>
-        <section className="screen screen-onboarding active" style={{ position: "relative" }}>
-          <InteractiveLines backgroundColor="rgb(10, 10, 10)" lineColor="rgba(255, 255, 255, 0.25)" lineWidth={0.7} minLines={4} maxLines={30} fade fadeIntensity={25} />
-          <div className="onboard-content">
-            <p className="onboard-logo">TUL</p>
-            <h1 className="onboard-h1">
-              Upload a photo.<br />
-              Pick a look.<br />
-              <em>Done.</em>
-            </h1>
-            <p className="onboard-lede">
-              No sliders to learn, no filters to fight with — just presets built
-              to make your photos better in one tap.
-            </p>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px" }}>
-              <Spinner size={16} />
-              <span style={{ fontSize: "13px", color: "var(--ink-muted)" }}>Loading…</span>
-            </div>
-          </div>
-        </section>
-      </>
-    );
-  }
-
   return (
     <>
       <section className={`screen screen-onboarding ${screen === "onboarding" ? "active" : ""}`} style={{ position: "relative" }}>
@@ -680,114 +480,7 @@ export default function Home() {
       </section>
 
       <section className={`screen screen-auth ${screen === "auth" ? "active" : ""}`}>
-        <div className="auth-card">
-          <div className="auth-top">
-            <span className="wordmark">tul</span>
-            <p>edit photos, have fun</p>
-          </div>
-          <div className="auth-actions">
-            <button className="btn btn-primary btn-block" onClick={handleGoogleSignIn} disabled={authLoading}>
-              <svg viewBox="0 0 24 24" fill="none">
-                <path d="M21.6 12.23c0-.68-.06-1.36-.18-2H12v3.79h5.4a4.6 4.6 0 01-2 3.02v2.5h3.24c1.9-1.75 3-4.32 3-7.31z" fill="#fff" />
-                <path d="M12 22c2.7 0 4.97-.9 6.63-2.44l-3.24-2.5c-.9.6-2.06.96-3.39.96-2.6 0-4.8-1.76-5.6-4.12H3.05v2.58A10 10 0 0012 22z" fill="#fff" opacity=".8" />
-                <path d="M6.4 13.9a5.98 5.98 0 010-3.8V7.52H3.05a10 10 0 000 8.96l3.35-2.58z" fill="#fff" opacity=".6" />
-                <path d="M12 5.98c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.96 9.96 0 0012 2a10 10 0 00-8.95 5.52L6.4 10.1c.8-2.36 3-4.12 5.6-4.12z" fill="#fff" opacity=".9" />
-              </svg>
-              {authLoading ? "Signing in..." : "Continue with Google"}
-            </button>
-            <button className="btn btn-outline btn-block" onClick={() => setEmailFieldsOpen(!emailFieldsOpen)} disabled={authLoading}>
-              Continue with email
-            </button>
-            <div className={`email-fields ${emailFieldsOpen ? "open" : ""}`}>
-              {!resetMode ? (
-                <>
-                  <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} disabled={authLoading} />
-                  <div style={{ position: "relative" }}>
-                    <input className="field" type={showPassword ? "text" : "password"} placeholder="Password" value={passInput} onChange={(e) => setPassInput(e.target.value)} disabled={authLoading} style={{ paddingRight: "36px" }} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-secondary)", display: "flex", alignItems: "center" }} tabIndex={-1}>
-                      {showPassword ? (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
-                          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
-                          <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                          <circle cx="12" cy="12" r="3" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                  <button className="btn btn-primary btn-block" onClick={handleEmailSignIn} disabled={authLoading}>
-                    {authLoading ? "Signing in..." : "Continue"}
-                  </button>
-                  <button className="link-quiet" onClick={() => { setResetMode(true); setResetStep("email"); setAuthError(""); }} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
-                    Forgot password?
-                  </button>
-                </>
-              ) : resetStep === "email" ? (
-                <>
-                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Enter your email to receive a reset code.</p>
-                  <input className="field" type="email" placeholder="Email" value={emailInput} onChange={(e) => setEmailInput(e.target.value)} disabled={authLoading} />
-                  <button className="btn btn-primary btn-block" onClick={handleSendResetCode} disabled={authLoading}>
-                    {authLoading ? "Sending..." : "Send reset code"}
-                  </button>
-                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
-                    Back to sign in
-                  </button>
-                </>
-              ) : resetStep === "code" ? (
-                <>
-                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Check your email for the reset code.</p>
-                  <input className="field" type="text" placeholder="Reset code" value={resetCode} onChange={(e) => setResetCode(e.target.value)} disabled={authLoading} />
-                  <button className="btn btn-primary btn-block" onClick={handleVerifyResetCode} disabled={authLoading}>
-                    {authLoading ? "Verifying..." : "Verify code"}
-                  </button>
-                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
-                    Back to sign in
-                  </button>
-                </>
-              ) : (
-                <>
-                  <p style={{ fontSize: "12px", color: "var(--ink-muted)", marginBottom: "8px", textAlign: "center" }}>Enter your new password.</p>
-                  <div style={{ position: "relative" }}>
-                    <input className="field" type={showPassword ? "text" : "password"} placeholder="New password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} disabled={authLoading} style={{ paddingRight: "36px" }} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", padding: "4px", color: "var(--text-secondary)", display: "flex", alignItems: "center" }} tabIndex={-1}>
-                      {showPassword ? (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                          <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
-                          <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
-                          <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                          <circle cx="12" cy="12" r="3" />
-                        </svg>
-                      )}
-                    </button>
-                  </div>
-                  <button className="btn btn-primary btn-block" onClick={handleResetPassword} disabled={authLoading}>
-                    {authLoading ? "Resetting..." : "Reset password"}
-                  </button>
-                  <button className="link-quiet" onClick={handleCancelReset} style={{ fontSize: "12px", marginTop: "4px", alignSelf: "center" }}>
-                    Back to sign in
-                  </button>
-                </>
-              )}
-            </div>
-            {authError && <p style={{ color: "var(--danger)", fontSize: "12px", textAlign: "center", margin: "8px 0 0" }}>{authError}</p>}
-          </div>
-          <div className="auth-footer">
-            <button className="btn btn-ghost btn-block" onClick={() => { setGuestMode(true); showScreen("home"); }} style={{ marginBottom: "12px" }}>
-              Skip for now — try as guest
-            </button>
-            <p className="fine">
-              Sign in to download your edits. Guest edits are saved locally.
-            </p>
-          </div>
-        </div>
+        <AuthCard onGuest={() => { setGuestMode(true); showScreen("home"); }} />
       </section>
 
       <section className={`screen screen-home ${screen === "home" ? "active" : ""}`}>
@@ -796,7 +489,11 @@ export default function Home() {
             <span className="wordmark">tul</span>
           </div>
           <div className="top-nav-right">
-            <UserButton />
+            {isSignedIn ? (
+              <UserButton />
+            ) : (
+              <button className="btn btn-ghost btn-sm" onClick={() => showScreen("auth")}>Sign in</button>
+            )}
           </div>
         </nav>
         <div className="home-content">
@@ -850,7 +547,11 @@ export default function Home() {
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" />
               </svg>
             </button>
-            <UserButton />
+            {isSignedIn ? (
+              <UserButton />
+            ) : (
+              <button className="btn btn-ghost btn-sm" onClick={() => showScreen("auth")}>Sign in</button>
+            )}
           </div>
         </nav>
 
@@ -1073,39 +774,16 @@ export default function Home() {
           <aside className="editor-preview">
             <div className="preview-header">
               <span>Preview</span>
-              {currentImage && (
-                <div className="zoom-controls">
-                  <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
-                  <span className="zoom-label">{zoom < 0 ? "Fit" : `${Math.round(zoom * 100)}%`}</span>
-                  <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
-                  <button className="icon-btn zoom-btn" onClick={zoomReset} title="Fit to container">⊡</button>
-                  <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
-                </div>
-              )}
             </div>
             <div
               className="preview-content"
-              ref={previewRef}
-              onWheel={handleWheel}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
-              style={{ cursor: zoom >= 0 ? (panning ? "grabbing" : "grab") : "default" }}
             >
               {currentImage ? (
-                <div style={{
-                  transform: zoom >= 0 ? `translate(${panX}px, ${panY}px) scale(${zoom})` : "none",
-                  transition: panning ? "none" : "transform 0.15s ease",
-                  transformOrigin: "center center",
-                  lineHeight: 0,
-                }}>
-                  <ImageWithSkeleton
-                    src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
-                    alt="Final output"
-                    imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none", maxWidth: zoom >= 0 ? "none" : undefined, maxHeight: zoom >= 0 ? "none" : undefined }}
-                  />
-                </div>
+                <img
+                  src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
+                  alt="Final output"
+                  style={{ filter: compare === "edited" ? getCombinedFilterString() : "none", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                />
               ) : (
                 <span className="preview-empty">No image selected</span>
               )}
@@ -1145,7 +823,7 @@ export default function Home() {
             {/* Layers */}
             <div className="layers-section">
               <div className="workspace-section-header">
-                <span>Effects ({layers.length + activeEffects.length})</span>
+                <span>Layers ({layers.length + activeEffects.length})</span>
                 <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
                   <button className="icon-btn" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)" style={{ fontSize: "14px" }}>&#x21A9;</button>
                   <button className="icon-btn" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)" style={{ fontSize: "14px" }}>&#x21AA;</button>
@@ -1321,23 +999,6 @@ export default function Home() {
 
       <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleFileChange} />
     </>
-  );
-}
-
-function EffectSliderControls({ settings, onChange, controls }: {
-  settings: Record<string, any>;
-  onChange: (patch: Record<string, any>) => void;
-  controls: { key: string; label: string; min: number; max: number; step: number }[];
-}) {
-  return (
-    <div className="effect-controls">
-      {controls.map((c) => (
-        <div key={c.key} className="effect-control">
-          <label>{c.label} ({settings[c.key]})</label>
-          <input type="range" min={c.min} max={c.max} step={c.step} value={settings[c.key]} onChange={(e) => onChange({ [c.key]: +e.target.value })} />
-        </div>
-      ))}
-    </div>
   );
 }
 

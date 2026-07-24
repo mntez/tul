@@ -633,7 +633,6 @@ export function applyEmboss(imageData: ImageData, s: EmbossSettings): ImageData 
     }
   return out;
 }
-
 export type EffectId = "pixelate" | "glitch" | "duotone" | "vignette" | "noise" | "kaleidoscope" | "ripple" | "halftone" | "ascii" | "receipt" | "motion-blur" | "radial-blur" | "crt" | "threshold" | "rgb-shift" | "motion-trail" | "bloom" | "emboss";
 
 export interface EffectDef {
@@ -662,3 +661,6 @@ export const EFFECTS: EffectDef[] = [
   { id: "ascii", name: "ASCII", desc: "Character-based art" },
   { id: "receipt", name: "Receipt", desc: "Thermal paper scan" },
 ];
+
+
+
