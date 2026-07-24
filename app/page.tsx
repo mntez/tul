@@ -26,7 +26,7 @@ import {
 } from "./effects";
 import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HalftoneSettings, HALFTONE_MAP_OPTIONS } from "./halftone";
 import { PRESETS, PRESET_CATEGORIES } from "./presets";
-import type { EffectLayer, UserPreset, SavedPreset, CurrentImage, RecentEdit, ScreenId } from "./types";
+import type { EffectLayer, UserPreset, SavedPreset, CurrentImage, ScreenId } from "./types";
 import AuthCard from "./components/auth/AuthCard";
 import EffectSliderControls from "./components/editor/EffectControls";
 
@@ -41,7 +41,6 @@ export default function Home() {
   }, []);
   const [guestMode, setGuestMode] = useState(false);
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
-  const [recentEdits, setRecentEdits] = useState<RecentEdit[]>([]);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
   const [compare, setCompare] = useState<"edited" | "original">("edited");
   const [showExport, setShowExport] = useState(false);
@@ -201,7 +200,6 @@ export default function Home() {
       const parsed = JSON.parse(saved);
       if (parsed.guestMode) setGuestMode(true);
       if (Array.isArray(parsed.layers)) setLayers(parsed.layers);
-      if (Array.isArray(parsed.recentEdits)) setRecentEdits(parsed.recentEdits);
     } catch {}
   }, []);
 
@@ -211,10 +209,9 @@ export default function Home() {
       localStorage.setItem("tul_state", JSON.stringify({
         guestMode,
         layers,
-        recentEdits: recentEdits.map(({ id, layers }) => ({ id, layers })),
       }));
     } catch {}
-  }, [guestMode, layers, recentEdits]);
+  }, [guestMode, layers]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -413,23 +410,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handler);
   }, [undo, redo, layersRef]);
 
-  const recordEdit = useCallback(() => {
-    if (!currentImage) return;
-    setRecentEdits((prev) => [
-      ...prev,
-      { id: Date.now(), src: currentImage.src, layers: [...layers] },
-    ]);
-  }, [currentImage, layers]);
-
-  const openEditorWithRecent = useCallback(
-    (edit: RecentEdit) => {
-      if (!edit.src) { fileInputRef.current?.click(); return; }
-      setCurrentImage({ src: edit.src, name: "reopened" });
-      setLayers(edit.layers);
-      showScreen("editor");
-    },
-    [showScreen]
-  );
 
   const bakeImageToCanvas = useCallback(
     (callback: (canvas: HTMLCanvasElement) => void) => {
@@ -471,12 +451,11 @@ export default function Home() {
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 4000);
-        recordEdit();
         setExporting(false);
         setShowExport(false);
       }, "image/jpeg", 0.92);
     });
-  }, [bakeImageToCanvas, recordEdit, exporting, guestMode, showScreen]);
+  }, [bakeImageToCanvas, exporting, guestMode, showScreen]);
 
   const shareImage = useCallback(() => {
     if (guestMode) {
@@ -491,14 +470,13 @@ export default function Home() {
           const file = new File([blob], "tul-edit.jpg", { type: "image/jpeg" });
           if (navigator.canShare && navigator.canShare({ files: [file] })) {
             await navigator.share({ files: [file], title: "tul edit" });
-            recordEdit();
           }
         } catch {
           // cancelled
         }
       }, "image/jpeg", 0.92);
     });
-  }, [bakeImageToCanvas, recordEdit, guestMode, showScreen]);
+  }, [bakeImageToCanvas, guestMode, showScreen]);
 
   const presetIdsInUse = new Set(layers.map((l) => l.presetId));
 
@@ -549,27 +527,6 @@ export default function Home() {
             </div>
             <strong>New edit</strong>
             <span>Upload a photo to get started</span>
-          </div>
-          <div className="recent-section">
-            <p className="section-label">Recent</p>
-            {recentEdits.length === 0 ? (
-              <p className="recent-empty">Your edits will show up here.</p>
-            ) : (
-              <div className="recent-grid">
-                {[...recentEdits].reverse().map((edit) => (
-                  <div key={edit.id} className="recent-card" onClick={() => openEditorWithRecent(edit)}>
-                    <div className="thumb-wrap">
-                      {edit.src ? <img src={edit.src} alt="" /> : (
-                        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--card)", color: "var(--ink-muted)", fontSize: "11px" }}>
-                          Re-upload
-                        </div>
-                      )}
-                    </div>
-                    <div className="cap">{edit.layers.length} effect{edit.layers.length !== 1 ? "s" : ""}</div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       </section>

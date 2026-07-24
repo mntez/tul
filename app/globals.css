@@ -1518,3 +1518,7 @@ input[type="range"]::-moz-range-thumb {
     max-height: 160px;
   }
 }
+
+/* Hide Clerk branding */
+.cl-footer,
+.cl-userButtonPopoverFooter { display: none !important; }

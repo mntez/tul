@@ -22,11 +22,5 @@ export interface CurrentImage {
   name: string;
 }
 
-export interface RecentEdit {
-  id: number;
-  src: string;
-  layers: EffectLayer[];
-}
-
 export type ScreenId = "onboarding" | "auth" | "home" | "editor";
 export type ResetStep = "email" | "code" | "password";

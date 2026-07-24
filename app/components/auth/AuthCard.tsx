@@ -26,7 +26,7 @@ export default function AuthCard({ onGuest }: AuthCardProps) {
           Skip for now - try as guest
         </button>
         <p className="fine">
-          Sign in to download your edits. Guest edits are saved locally.
+          Sign in to download your edits.
         </p>
       </div>
     </div>

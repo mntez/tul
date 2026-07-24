@@ -40,7 +40,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <ClerkProvider>
+        <ClerkProvider appearance={{ elements: { footer: { display: "none" }, userButtonPopoverFooter: { display: "none" } } }}>
           <Providers>{children}</Providers>
         </ClerkProvider>
       </body>
