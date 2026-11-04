@@ -1,22 +1,8 @@
 import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Instrument_Sans, Instrument_Serif } from "next/font/google";
 import Providers from "./providers";
 import "./globals.css";
-
-const instrumentSans = Instrument_Sans({
-  variable: "--font-body",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const instrumentSerif = Instrument_Serif({
-  variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["400"],
-  style: ["normal", "italic"],
-});
 
 const geistPixel = localFont({
   variable: "--font-pixel",
@@ -36,7 +22,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${instrumentSans.variable} ${instrumentSerif.variable} ${geistPixel.variable}`}
+      className={geistPixel.variable}
       suppressHydrationWarning
     >
       <body>

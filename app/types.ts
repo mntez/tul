@@ -1,20 +1,18 @@
+import type { FilmLookSettings } from "./film-settings";
+
 export interface EffectLayer {
   id: string;
   presetId: string;
   intensity: number;
   enabled: boolean;
-}
-
-export interface UserPreset {
-  id: string;
-  name: string;
-  filters: Record<string, number>;
+  locked?: boolean;
 }
 
 export interface SavedPreset {
   id: string;
   name: string;
   layers: { presetId: string; intensity: number }[];
+  filmSettings?: FilmLookSettings;
 }
 
 export interface CurrentImage {

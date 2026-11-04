@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import InteractiveLines from "./interactive-lines";
 import { ImageWithSkeleton, Spinner, FadeIn } from "./animations";
@@ -25,10 +25,14 @@ import {
   EFFECTS, EffectId, ASCII_CHARSET_OPTIONS,
 } from "./effects";
 import { applyHalftone, DEFAULT_HALFTONE_SETTINGS, HalftoneSettings, HALFTONE_MAP_OPTIONS } from "./halftone";
-import { PRESETS, PRESET_CATEGORIES } from "./presets";
-import type { EffectLayer, UserPreset, SavedPreset, CurrentImage, ScreenId } from "./types";
+import { parseStoredProfileLayers, PROFILE_BY_ID, PROFILE_CATALOG, PROFILE_GROUPS } from "./profile-catalog";
+import { applyFilmProfile } from "./profile-effects";
+import type { EffectLayer, SavedPreset, CurrentImage, ScreenId } from "./types";
 import AuthCard from "./components/auth/AuthCard";
-import EffectSliderControls from "./components/editor/EffectControls";
+import EffectSliderControls, { RangeValueControl } from "./components/editor/EffectControls";
+import FilmLookControls from "./components/editor/FilmLookControls";
+import { DEFAULT_FILM_SETTINGS, filmSettingsForProfile, getProfileModuleId, parseFilmSettings, type FilmLookSettings, type FilmModuleId } from "./film-settings";
+import { applyFilmLook } from "./film-processing";
 
 export default function Home() {
   const [screen, setScreen] = useState<ScreenId>("onboarding");
@@ -46,13 +50,15 @@ export default function Home() {
   const [compare, setCompare] = useState<"edited" | "original">("edited");
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"presets" | "effects">("presets");
-  const [userPresets, setUserPresets] = useState<UserPreset[]>([]);
+  const [selectedEffectId, setSelectedEffectId] = useState<EffectId | null>(null);
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
+  const [filmSettings, setFilmSettings] = useState<FilmLookSettings>(DEFAULT_FILM_SETTINGS);
   const [presetNameInput, setPresetNameInput] = useState("");
   const [activeEffects, setActiveEffects] = useState<EffectId[]>([]);
   const [effectSettings, setEffectSettings] = useState<Record<string, any>>({});
   const [effectResultSrc, setEffectResultSrc] = useState<string | null>(null);
+  const activeProfileLayers = useMemo(() => layers.filter((layer) => layer.enabled && PROFILE_BY_ID.has(layer.presetId)), [layers]);
+  const hasEnabledFilmModules = useMemo(() => Object.values(filmSettings).some((module) => module.enabled === true), [filmSettings]);
   const [processing, setProcessing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [exportFormat, setExportFormat] = useState("jpeg");
@@ -65,6 +71,7 @@ export default function Home() {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const viewportRef = useRef<HTMLDivElement>(null);
   const [imgNatural, setImgNatural] = useState({ w: 0, h: 0 });
+  const storageHydrationGuard = useRef(false);
 
   const zoomToFit = useCallback(() => {
     const vp = viewportRef.current;
@@ -202,22 +209,50 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem("tul_state");
-      if (!saved) return;
-      const parsed = JSON.parse(saved);
-      if (parsed.guestMode) setGuestMode(true);
-      if (Array.isArray(parsed.layers)) setLayers(parsed.layers);
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (parsed && typeof parsed === "object") {
+          const state = parsed as Record<string, unknown>;
+          if (state.guestMode === true) setGuestMode(true);
+          if (Array.isArray(state.layers)) setLayers(parseStoredProfileLayers(state.layers));
+          if (state.filmSettings) setFilmSettings(parseFilmSettings(state.filmSettings));
+          if (Array.isArray(state.savedPresets)) {
+            const restored = state.savedPresets.flatMap((item: unknown): SavedPreset[] => {
+              if (!item || typeof item !== "object") return [];
+              const record = item as Record<string, unknown>;
+              if (typeof record.id !== "string" || typeof record.name !== "string" || !Array.isArray(record.layers)) return [];
+              const validLayers = record.layers.flatMap((entry: unknown) => {
+                if (!entry || typeof entry !== "object") return [];
+                const layer = entry as Record<string, unknown>;
+                if (typeof layer.presetId !== "string" || typeof layer.intensity !== "number" || !Number.isFinite(layer.intensity) || !PROFILE_BY_ID.has(layer.presetId)) return [];
+                return [{ presetId: layer.presetId, intensity: Math.max(0, Math.min(100, layer.intensity)) }];
+              });
+              return validLayers.length || record.filmSettings
+                ? [{ id: record.id, name: record.name, layers: validLayers, filmSettings: parseFilmSettings(record.filmSettings) }]
+                : [];
+            });
+            setSavedPresets(restored);
+          }
+        }
+      }
     } catch {}
   }, []);
 
   // Persist state changes
   useEffect(() => {
+    if (!storageHydrationGuard.current) {
+      storageHydrationGuard.current = true;
+      return;
+    }
     try {
       localStorage.setItem("tul_state", JSON.stringify({
         guestMode,
         layers,
+        filmSettings,
+        savedPresets,
       }));
     } catch {}
-  }, [guestMode, layers]);
+  }, [guestMode, layers, filmSettings, savedPresets]);
 
   const loadImageFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
@@ -262,22 +297,28 @@ export default function Home() {
 
   const saveCurrentAsPreset = useCallback(() => {
     const enabled = layers.filter((l) => l.enabled);
-    if (enabled.length === 0) { alert("Enable at least one effect layer first."); return; }
+    if (enabled.length === 0 && !hasEnabledFilmModules) { alert("Enable a film module or apply a profile first."); return; }
     const name = presetNameInput.trim() || "Preset " + (savedPresets.length + 1);
-    setSavedPresets((prev) => [...prev, { id: "saved_" + Date.now(), name, layers: enabled.map((l) => ({ presetId: l.presetId, intensity: l.intensity })) }]);
+    setSavedPresets((prev) => [...prev, { id: "saved_" + Date.now(), name, layers: enabled.map((l) => ({ presetId: l.presetId, intensity: l.intensity })), filmSettings }]);
     setPresetNameInput("");
-  }, [layers, savedPresets.length, presetNameInput]);
+  }, [layers, savedPresets.length, presetNameInput, filmSettings, hasEnabledFilmModules]);
 
   const deleteSavedPreset = useCallback((id: string) => {
     setSavedPresets((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
   const applySavedPreset = useCallback((preset: SavedPreset) => {
-    pushHistory();
-    setLayers((prev) => [
-      ...prev,
-      ...preset.layers.map((l) => ({ id: Date.now().toString() + Math.random(), presetId: l.presetId, intensity: l.intensity, enabled: true })),
-    ]);
+    const profileLayers = parseStoredProfileLayers(preset.layers.map((layer, index) => ({
+      ...layer,
+      id: `saved-${preset.id}-${Date.now()}-${index}-${Math.random()}`,
+      enabled: true,
+      locked: false,
+    })));
+    if (preset.filmSettings) setFilmSettings(parseFilmSettings(preset.filmSettings));
+    if (profileLayers.length > 0) {
+      pushHistory();
+      setLayers((prev) => [...prev, ...profileLayers]);
+    }
   }, [pushHistory]);
 
   const applySingleEffect = useCallback((id: EffectId, imageData: ImageData) => {
@@ -304,19 +345,33 @@ export default function Home() {
     }
   }, [getEffectSettings]);
 
-  const chainEffects = useCallback((imageData: ImageData, ids: EffectId[]) => {
+  const chainEffects = useCallback((imageData: ImageData, ids: EffectId[], profileLayers: EffectLayer[], settings: FilmLookSettings) => {
     let data = imageData;
+    const profileIntensities: Partial<Record<FilmModuleId, number>> = {};
     for (const id of ids) {
       const r = applySingleEffect(id, data);
       if (r) data = r;
     }
-    return data;
+    for (const layer of profileLayers) {
+      const profile = PROFILE_BY_ID.get(layer.presetId);
+      if (!profile) continue;
+      const familyModule = getProfileModuleId(profile.family);
+      if (familyModule && settings[familyModule].enabled === true) {
+        const previous = profileIntensities[familyModule] ?? 0;
+        const amount = Math.max(0, Math.min(100, layer.intensity)) / 100;
+        profileIntensities[familyModule] = 1 - (1 - previous) * (1 - amount);
+        continue;
+      }
+      data = applyFilmProfile(data, profile, layer.intensity);
+    }
+    return applyFilmLook(data, settings, profileIntensities);
   }, [applySingleEffect]);
 
   useEffect(() => {
-    if (!currentImage || activeEffects.length === 0) { setEffectResultSrc(null); setProcessing(false); return; }
+    if (!currentImage || (activeEffects.length === 0 && activeProfileLayers.length === 0 && !hasEnabledFilmModules)) { setEffectResultSrc(null); setProcessing(false); return; }
     setProcessing(true);
     let cancelled = false;
+    let profileWorker: Worker | null = null;
     const img = new Image();
     img.onload = () => {
       if (cancelled) return;
@@ -326,58 +381,55 @@ export default function Home() {
       const ctx = c.getContext("2d")!;
       ctx.drawImage(img, 0, 0);
       const imageData = ctx.getImageData(0, 0, c.width, c.height);
-      const result = chainEffects(imageData, activeEffects);
-      ctx.putImageData(result, 0, 0);
-      if (!cancelled) { setEffectResultSrc(c.toDataURL()); setProcessing(false); }
+      const finish = (result: ImageData) => {
+        if (cancelled) return;
+        ctx.putImageData(result, 0, 0);
+        setEffectResultSrc(c.toDataURL());
+        setProcessing(false);
+        profileWorker?.terminate();
+        profileWorker = null;
+      };
+      if (activeProfileLayers.length === 0 && !hasEnabledFilmModules) {
+        finish(chainEffects(imageData, activeEffects, [], filmSettings));
+        return;
+      }
+      const base = chainEffects(imageData, activeEffects, [], DEFAULT_FILM_SETTINGS);
+      try {
+        profileWorker = new Worker(new URL("./profile-worker.ts", import.meta.url), { type: "module" });
+        profileWorker.onmessage = (event: MessageEvent<{ data: ArrayBuffer; width: number; height: number }>) => {
+          const result = event.data;
+          if (!(result.data instanceof ArrayBuffer) || result.data.byteLength !== result.width * result.height * 4) {
+            finish(chainEffects(imageData, activeEffects, activeProfileLayers, filmSettings));
+            return;
+          }
+          finish(new ImageData(new Uint8ClampedArray(result.data), result.width, result.height));
+        };
+        profileWorker.onerror = () => finish(chainEffects(imageData, activeEffects, activeProfileLayers, filmSettings));
+        const input = new Uint8ClampedArray(base.data);
+        profileWorker.postMessage({
+          data: input.buffer,
+          width: base.width,
+          height: base.height,
+          layers: activeProfileLayers.map(({ presetId, intensity }) => ({ presetId, intensity })),
+          settings: filmSettings,
+        }, [input.buffer]);
+      } catch {
+        finish(chainEffects(imageData, activeEffects, activeProfileLayers, filmSettings));
+      }
     };
+    img.onerror = () => { if (!cancelled) { setEffectResultSrc(null); setProcessing(false); } };
     img.src = currentImage.src;
-    return () => { cancelled = true; };
-  }, [currentImage, activeEffects, effectSettings]);
-
-  const userPresetFilter = useCallback((preset: UserPreset, intensity: number) => {
-    const f = preset.filters;
-    const parts: string[] = [];
-    const t = intensity / 100;
-    if (f.grayscale) parts.push(`grayscale(${f.grayscale * t}%)`);
-    if (f.sepia) parts.push(`sepia(${f.sepia * t}%)`);
-    if (f.saturate) parts.push(`saturate(${100 + (f.saturate - 100) * t}%)`);
-    if (f.contrast) parts.push(`contrast(${100 + (f.contrast - 100) * t}%)`);
-    if (f.brightness) parts.push(`brightness(${100 + (f.brightness - 100) * t}%)`);
-    if (f["hue-rotate"]) parts.push(`hue-rotate(${f["hue-rotate"] * t}deg)`);
-    return parts.length ? parts.join(" ") : "none";
-  }, []);
-
-  const resolvePresetFilter = useCallback((presetId: string, intensity: number) => {
-    const builtin = PRESETS.find((p) => p.id === presetId);
-    if (builtin) return builtin.filter(intensity);
-    const user = userPresets.find((p) => p.id === presetId);
-    if (user) return userPresetFilter(user, intensity);
-    return "";
-  }, [userPresets, userPresetFilter]);
-
-  const getCombinedFilterStringForPreset = useCallback((preset: SavedPreset) => {
-    const parts = preset.layers.map((l) => resolvePresetFilter(l.presetId, l.intensity)).filter(Boolean);
-    return parts.length ? parts.join(" ") : "none";
-  }, [resolvePresetFilter]);
-
-  const getCombinedFilterString = useCallback(() => {
-    const parts = layers
-      .filter((l) => l.enabled)
-      .map((l) => resolvePresetFilter(l.presetId, l.intensity))
-      .filter(Boolean);
-    return parts.length ? parts.join(" ") : "none";
-  }, [layers, resolvePresetFilter]);
+    return () => { cancelled = true; profileWorker?.terminate(); };
+  }, [currentImage, activeEffects, activeProfileLayers, effectSettings, filmSettings, hasEnabledFilmModules, chainEffects]);
 
   const addLayer = useCallback((presetId: string) => {
-    if (presetId === "original") {
-      pushHistory();
-      setLayers([]);
-      return;
-    }
+    const profile = PROFILE_BY_ID.get(presetId);
+    if (!profile) return;
     pushHistory();
+    setFilmSettings((current) => filmSettingsForProfile(current, profile));
     setLayers((prev) => [
       ...prev,
-      { id: Date.now().toString(), presetId, intensity: 100, enabled: true },
+      { id: Date.now().toString(), presetId, intensity: 100, enabled: true, locked: false },
     ]);
   }, [pushHistory]);
 
@@ -396,39 +448,66 @@ export default function Home() {
     setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, enabled: !l.enabled } : l)));
   }, [pushHistory]);
 
+  const toggleLayerLock = useCallback((id: string) => {
+    pushHistory();
+    setLayers((prev) => prev.map((layer) => (
+      layer.id === id ? { ...layer, locked: !layer.locked } : layer
+    )));
+  }, [pushHistory]);
+
   const moveLayer = useCallback((id: string, dir: "up" | "down") => {
+    const currentIndex = layers.findIndex((layer) => layer.id === id);
+    const nextIndex = dir === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (
+      currentIndex < 0 ||
+      layers[currentIndex].locked ||
+      nextIndex < 0 ||
+      nextIndex >= layers.length ||
+      layers[nextIndex].locked
+    ) return;
+
     pushHistory();
     setLayers((prev) => {
       const idx = prev.findIndex((l) => l.id === id);
-      if (idx === -1) return prev;
+      if (idx === -1 || prev[idx].locked) return prev;
       const next = dir === "up" ? idx - 1 : idx + 1;
-      if (next < 0 || next >= prev.length) return prev;
+      if (next < 0 || next >= prev.length || prev[next].locked) return prev;
       const arr = [...prev];
       [arr[idx], arr[next]] = [arr[next], arr[idx]];
       return arr;
     });
-  }, [pushHistory]);
+  }, [layers, pushHistory]);
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const dragPushedRef = useRef(false);
 
-  const handleDragStart = useCallback((index: number) => {
+  const handleDragStart = useCallback((event: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (layers[index]?.locked) {
+      event.preventDefault();
+      return;
+    }
     setDragIndex(index);
     dragPushedRef.current = false;
-  }, []);
+  }, [layers]);
 
   const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
     if (dragIndex === null || dragIndex === index) return;
+    const firstIndex = Math.min(dragIndex, index);
+    const lastIndex = Math.max(dragIndex, index);
+    if (layers.slice(firstIndex, lastIndex + 1).some((layer) => layer.locked)) return;
+
+    e.preventDefault();
     if (!dragPushedRef.current) { dragPushedRef.current = true; pushHistory(); }
     setLayers((prev) => {
+      if (prev[dragIndex]?.locked || prev[index]?.locked) return prev;
+      if (prev.slice(firstIndex, lastIndex + 1).some((layer) => layer.locked)) return prev;
       const arr = [...prev];
       const [removed] = arr.splice(dragIndex, 1);
       arr.splice(index, 0, removed);
       return arr;
     });
     setDragIndex(index);
-  }, [dragIndex, pushHistory]);
+  }, [dragIndex, layers, pushHistory]);
 
   const handleDragEnd = useCallback(() => {
     setDragIndex(null);
@@ -450,7 +529,7 @@ export default function Home() {
   const bakeImageToCanvas = useCallback(
     (callback: (canvas: HTMLCanvasElement) => void) => {
       if (!currentImage) return;
-      const src = activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src;
+      const src = effectResultSrc ?? currentImage.src;
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
@@ -458,14 +537,13 @@ export default function Home() {
         canvas.height = img.naturalHeight;
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          ctx.filter = getCombinedFilterString();
           ctx.drawImage(img, 0, 0);
         }
         callback(canvas);
       };
       img.src = src;
     },
-    [currentImage, getCombinedFilterString, activeEffects, effectResultSrc]
+    [currentImage, effectResultSrc]
   );
 
   const bakeAndDownload = useCallback(() => {
@@ -539,7 +617,7 @@ export default function Home() {
             <em>Done.</em>
           </h1>
           <p className="onboard-lede">
-            No sliders to learn, no filters to fight with — just presets built
+            No sliders to learn, no filters to fight with â€” just presets built
             to make your photos better in one tap.
           </p>
           <button className="btn btn-primary" onClick={() => showScreen(isSignedIn ? "home" : "auth")} style={{ padding: "12px 32px", fontSize: "15px" }}>
@@ -612,217 +690,50 @@ export default function Home() {
 
         <div className="editor-layout">
           <aside className="editor-sidebar">
-            <div className="sidebar-header">
-              <input className="sidebar-search" type="text" placeholder="Search presets..." />
-            </div>
-            <div className="sidebar-tabs">
-              <button className={`sidebar-tab ${sidebarTab === "presets" ? "active" : ""}`} onClick={() => setSidebarTab("presets")}>Presets</button>
-              <button className={`sidebar-tab ${sidebarTab === "effects" ? "active" : ""}`} onClick={() => setSidebarTab("effects")}>Effects</button>
-            </div>
-            <div className="sidebar-content">
-              {sidebarTab === "presets" ? (
-                <>
-                  {PRESET_CATEGORIES.map((cat) => (
-                    <div key={cat.name} className="preset-category">
-                      <span className="preset-category-label">{cat.name}</span>
-                      <div className="preset-category-grid">
-                        {cat.ids.map((id) => {
-                          const p = PRESETS.find((pr) => pr.id === id);
-                          if (!p) return null;
-                          return (
-                            <div
-                              key={p.id}
-                              className={`preset-thumb ${presetIdsInUse.has(p.id) ? "in-use" : ""}`}
-                              onClick={() => addLayer(p.id)}
-                            >
-                              {currentImage && <img src={currentImage.src} alt={p.name} style={{ filter: p.filter(100) }} />}
-                              <span className="preset-label">{p.name}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                  {savedPresets.length > 0 && (
-                    <div className="preset-category">
-                      <span className="preset-category-label">Saved</span>
-                      <div className="preset-category-grid">
-                        {savedPresets.map((sp) => (
-                          <div
-                            key={sp.id}
-                            className="preset-thumb"
-                            onClick={() => applySavedPreset(sp)}
-                          >
-                            {currentImage && <img src={currentImage.src} alt={sp.name} style={{ filter: getCombinedFilterStringForPreset(sp) }} />}
-                            <span className="preset-label">{sp.name}</span>
-                            <button className="preset-delete" onClick={(e) => { e.stopPropagation(); deleteSavedPreset(sp.id); }} title="Delete">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="sidebar-save-row">
-                    <input className="field sidebar-save-input" type="text" placeholder="Preset name..." value={presetNameInput} onChange={(e) => setPresetNameInput(e.target.value)} />
-                    <button className="btn btn-ghost" onClick={saveCurrentAsPreset} disabled={layers.length === 0} style={{ padding: "6px 12px", fontSize: "12px", flexShrink: 0 }}>
-                      + Save
-                    </button>
-                  </div>
-                </>
+            <div className="minimal-panel-section input-section">
+              <div className="minimal-section-heading"><span>Input</span><span className="minimal-status">{currentImage ? "Ready" : "Standby"}</span></div>
+              {currentImage ? (
+                <button className="minimal-source" onClick={() => fileInputRef.current?.click()}>
+                  <span className="minimal-source-thumb"><ImageWithSkeleton src={currentImage.src} alt="" /></span>
+                  <span className="minimal-source-copy"><strong>{currentImage.name}</strong><small>Change image</small></span>
+                </button>
               ) : (
-                <div className="effects-list">
-                  {EFFECTS.map((eff) => {
-                    const on = isEffectActive(eff.id);
-                    return (
-                      <div key={eff.id}>
-                        <div className={`effect-card ${on ? "active" : ""}`} onClick={() => toggleEffect(eff.id)}>
-                          <div className="effect-card-header">
-                            <span className="effect-name">{eff.name}</span>
-                            <span className="effect-badge">{on ? "on" : "canvas"}</span>
-                          </div>
-                          <p className="effect-desc">{eff.desc}</p>
-                        </div>
-
-                        {on && eff.id === "halftone" && (
-                          <EffectHalftoneControls
-                            settings={getEffectSettings("halftone", DEFAULT_HALFTONE_SETTINGS)}
-                            onChange={(patch) => updateEffectSettings("halftone", patch)}
-                          />
-                        )}
-                        {on && eff.id === "pixelate" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("pixelate", DEFAULT_PIXELATE)}
-                            onChange={(patch) => updateEffectSettings("pixelate", patch)}
-                            controls={[{ key: "blockSize", label: "Block size", min: 2, max: 40, step: 1 }]}
-                          />
-                        )}
-                        {on && eff.id === "glitch" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("glitch", DEFAULT_GLITCH)}
-                            onChange={(patch) => updateEffectSettings("glitch", patch)}
-                            controls={[
-                              { key: "shift", label: "Shift", min: 1, max: 30, step: 1 },
-                              { key: "intensity", label: "Intensity", min: 0.1, max: 1, step: 0.05 },
-                              { key: "jitter", label: "Jitter", min: 0, max: 10, step: 0.5 },
-                            ]}
-                          />
-                        )}
-                        {on && eff.id === "motion-blur" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("motion-blur", DEFAULT_MOTION_BLUR)}
-                            onChange={(patch) => updateEffectSettings("motion-blur", patch)}
-                            controls={[
-                              { key: "length", label: "Length", min: 1, max: 50, step: 1 },
-                              { key: "angle", label: "Angle", min: 0, max: 360, step: 1 },
-                              { key: "quality", label: "Quality", min: 2, max: 20, step: 1 },
-                            ]}
-                          />
-                        )}
-                        {on && eff.id === "radial-blur" && (
-                          <EffectRadialBlurControls
-                            settings={getEffectSettings("radial-blur", DEFAULT_RADIAL_BLUR)}
-                            onChange={(patch) => updateEffectSettings("radial-blur", patch)}
-                          />
-                        )}
-                        {on && eff.id === "duotone" && (
-                          <EffectDuotoneControls
-                            settings={getEffectSettings("duotone", DEFAULT_DUOTONE)}
-                            onChange={(patch) => updateEffectSettings("duotone", patch)}
-                          />
-                        )}
-                        {on && eff.id === "vignette" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("vignette", DEFAULT_VIGNETTE)}
-                            onChange={(patch) => updateEffectSettings("vignette", patch)}
-                            controls={[
-                              { key: "strength", label: "Strength", min: 0, max: 1, step: 0.05 },
-                              { key: "radius", label: "Radius", min: 0.1, max: 1.5, step: 0.05 },
-                            ]}
-                          />
-                        )}
-                        {on && eff.id === "noise" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("noise", DEFAULT_NOISE)}
-                            onChange={(patch) => updateEffectSettings("noise", patch)}
-                            controls={[{ key: "amount", label: "Amount", min: 0, max: 0.5, step: 0.01 }]}
-                          />
-                        )}
-                        {on && eff.id === "kaleidoscope" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("kaleidoscope", DEFAULT_KALEIDOSCOPE)}
-                            onChange={(patch) => updateEffectSettings("kaleidoscope", patch)}
-                            controls={[{ key: "segments", label: "Segments", min: 2, max: 24, step: 1 }]}
-                          />
-                        )}
-                        {on && eff.id === "ripple" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("ripple", DEFAULT_RIPPLE)}
-                            onChange={(patch) => updateEffectSettings("ripple", patch)}
-                            controls={[
-                              { key: "amplitude", label: "Amplitude", min: 1, max: 30, step: 1 },
-                              { key: "frequency", label: "Frequency", min: 1, max: 50, step: 1 },
-                            ]}
-                          />
-                        )}
-                        {on && eff.id === "ascii" && (
-                          <EffectASCIIControls
-                            settings={getEffectSettings("ascii", DEFAULT_ASCII)}
-                            onChange={(patch) => updateEffectSettings("ascii", patch)}
-                          />
-                        )}
-                        {on && eff.id === "receipt" && (
-                          <EffectSliderControls
-                            settings={getEffectSettings("receipt", DEFAULT_RECEIPT)}
-                            onChange={(patch) => updateEffectSettings("receipt", patch)}
-                            controls={[
-                              { key: "noise", label: "Noise", min: 0, max: 0.3, step: 0.01 },
-                              { key: "distortion", label: "Distortion", min: 0, max: 0.1, step: 0.005 },
-                              { key: "vignette", label: "Vignette", min: 0, max: 0.5, step: 0.01 },
-                            ]}
-                          />
-                        )}
-                        {on && eff.id === "crt" && (
-                          <EffectCRTControls
-                            settings={getEffectSettings("crt", DEFAULT_CRT)}
-                            onChange={(patch) => updateEffectSettings("crt", patch)}
-                          />
-                        )}
-                        {on && eff.id === "threshold" && (
-                          <EffectThresholdControls
-                            settings={getEffectSettings("threshold", DEFAULT_THRESHOLD)}
-                            onChange={(patch) => updateEffectSettings("threshold", patch)}
-                          />
-                        )}
-                        {on && eff.id === "rgb-shift" && (
-                          <EffectRGBShiftControls
-                            settings={getEffectSettings("rgb-shift", DEFAULT_RGB_SHIFT)}
-                            onChange={(patch) => updateEffectSettings("rgb-shift", patch)}
-                          />
-                        )}
-                        {on && eff.id === "motion-trail" && (
-                          <EffectMotionTrailControls
-                            settings={getEffectSettings("motion-trail", DEFAULT_MOTION_TRAIL)}
-                            onChange={(patch) => updateEffectSettings("motion-trail", patch)}
-                          />
-                        )}
-                        {on && eff.id === "bloom" && (
-                          <EffectBloomControls
-                            settings={getEffectSettings("bloom", DEFAULT_BLOOM)}
-                            onChange={(patch) => updateEffectSettings("bloom", patch)}
-                          />
-                        )}
-                        {on && eff.id === "emboss" && (
-                          <EffectEmbossControls
-                            settings={getEffectSettings("emboss", DEFAULT_EMBOSS)}
-                            onChange={(patch) => updateEffectSettings("emboss", patch)}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                <button className={`minimal-upload ${isDragging ? "drag-over" : ""}`} onClick={() => fileInputRef.current?.click()} onDragOver={handleFileDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+                  <span>Drop file or click to browse</span><small>JPG, PNG, WebP</small>
+                </button>
               )}
+            </div>
+            <div className="minimal-panel-section">
+              <div className="minimal-section-heading"><span>Effects</span><small>{EFFECTS.length}</small></div>
+              <div className="minimal-list">
+                {EFFECTS.map((eff) => {
+                  const on = isEffectActive(eff.id);
+                  return <div key={eff.id} className={`minimal-list-row ${selectedEffectId === eff.id ? "selected" : ""}`}>
+                    <button className="minimal-row-select" onClick={() => setSelectedEffectId(eff.id)}><span className={`minimal-dot ${on ? "on" : ""}`} />{eff.name}</button>
+                    <button className={`minimal-toggle ${on ? "on" : ""}`} onClick={() => { setSelectedEffectId(eff.id); toggleEffect(eff.id); }} aria-label={`${on ? "Disable" : "Enable"} ${eff.name}`} title={on ? "Disable effect" : "Enable effect"}><span /></button>
+                  </div>;
+                })}
+              </div>
+            </div>
+            <div className="minimal-panel-section">
+              <div className="minimal-section-heading"><span>Presets</span><small>{PROFILE_CATALOG.length}</small></div>
+              {PROFILE_GROUPS.map((group) => (
+                <div key={group.id} className="minimal-preset-group profile-preset-group">
+                  <span className="minimal-category-label">{group.name}<small>{group.profiles.length}</small></span>
+                  <div className="minimal-list">
+                    {group.profiles.map((profile) => {
+                      const inUse = presetIdsInUse.has(profile.id);
+                      return <button key={profile.id} className={`minimal-list-row minimal-preset-row profile-preset-row ${inUse ? "selected" : ""}`} onClick={() => addLayer(profile.id)}>
+                        <span className={`minimal-dot ${inUse ? "on" : ""}`} />
+                        <span className="profile-preset-copy"><span>{profile.name}</span><small>{profile.category} · {profile.sourceId}</small></span>
+                        {inUse && <small className="profile-in-use">In use</small>}
+                      </button>;
+                    })}
+                  </div>
+                </div>
+              ))}
+              {savedPresets.length > 0 && <div className="minimal-preset-group"><span className="minimal-category-label">Saved</span><div className="minimal-list">{savedPresets.map((preset) => <div className="minimal-list-row" key={preset.id}><button className="minimal-row-select" onClick={() => applySavedPreset(preset)}><span className="minimal-dot" />{preset.name}</button><button className="minimal-delete" onClick={() => deleteSavedPreset(preset.id)} aria-label={`Delete ${preset.name}`}>×</button></div>)}</div></div>}
+              <div className="minimal-save-row"><input className="field" type="text" placeholder="Preset name" value={presetNameInput} onChange={(e) => setPresetNameInput(e.target.value)} /><button className="minimal-text-button" onClick={saveCurrentAsPreset} disabled={layers.length === 0 && !hasEnabledFilmModules}>+ Save</button></div>
             </div>
           </aside>
 
@@ -833,15 +744,20 @@ export default function Home() {
                 {processing && <Spinner size={14} />}
                 {currentImage && imgNatural.w > 0 && (
                   <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>
-                    {imgNatural.w}×{imgNatural.h}{fileSize > 0 ? ` · ${(fileSize / 1024 / 1024).toFixed(1)}MB` : ""}
+                    {imgNatural.w}{" \u00d7 "}{imgNatural.h}{fileSize > 0 ? ` \u00b7 ${(fileSize / 1024 / 1024).toFixed(1)}MB` : ""}
                   </span>
                 )}
                 {currentImage && (
                   <div className="zoom-controls">
-                    <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
+                    <button className="icon-btn zoom-btn" onClick={zoomOut} title="Zoom out" aria-label="Zoom out">−</button>
                     <span className="zoom-label">{`${Math.round(zoom * 100)}%`}</span>
                     <button className="icon-btn zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
-                    <button className="icon-btn zoom-btn" onClick={zoomToFit} title="Fit to container">⊡</button>
+                    <button className="icon-btn zoom-btn" onClick={zoomToFit} title="Fit image to view" aria-label="Fit image to view">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M8 3H3v5m13-5h5v5M21 16v5h-5M8 21H3v-5" />
+                        <path d="m8 8-5-5m13 5 5-5m-5 13 5 5m-13-5-5 5" />
+                      </svg>
+                    </button>
                     <button className="icon-btn zoom-btn" onClick={zoomOneToOne} title="Actual size">1:1</button>
                   </div>
                 )}
@@ -857,7 +773,7 @@ export default function Home() {
                   onMouseLeave={handleMouseUp}
                 >
                   <img
-                    src={compare === "original" ? currentImage.src : (activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src)}
+                    src={compare === "original" ? currentImage.src : (effectResultSrc ?? currentImage.src)}
                     alt="Final output"
                     draggable={false}
                     onLoad={(e) => {
@@ -872,7 +788,6 @@ export default function Home() {
                       setPanY((r.height - n.naturalHeight * f) / 2);
                     }}
                     style={{
-                      filter: compare === "edited" ? getCombinedFilterString() : "none",
                       display: "block",
                       maxWidth: "none",
                       maxHeight: "none",
@@ -894,135 +809,233 @@ export default function Home() {
           </aside>
 
           <div className="editor-workspace">
-            {/* Source image */}
-            <div className="source-section">
-              <div className="workspace-section-header">
-                <span>Source</span>
-                {currentImage && <button className="link-quiet" onClick={() => fileInputRef.current?.click()}>Change image</button>}
-              </div>
-              {currentImage ? (
-                <div className="source-info">
-                  <div className="source-thumb">
-                    <ImageWithSkeleton src={currentImage.src} alt="" />
-                  </div>
-                  <div className="source-name">{currentImage.name}</div>
+            <div className="minimal-inspector-section">
+              <div className="minimal-inspector-heading"><span>Settings</span><button className="minimal-text-button" onClick={() => { setFilmSettings(DEFAULT_FILM_SETTINGS); if (selectedEffectId) setEffectSettings((prev) => ({ ...prev, [selectedEffectId]: EFFECT_DEFAULTS[selectedEffectId] })); }}>Reset</button></div>
+              <div className="minimal-film-control-heading">Film Controls <small>14 modules</small></div>
+              <FilmLookControls settings={filmSettings} onChange={setFilmSettings} />
+              {selectedEffectId ? <>
+                <div className="minimal-selected-effect"><span>{EFFECTS.find((item) => item.id === selectedEffectId)?.name}</span><small>{isEffectActive(selectedEffectId) ? "Active" : "Inactive"}</small></div>
+                <div className="minimal-effect-settings">
+                  {EFFECTS.filter((eff) => eff.id === selectedEffectId).map((eff) => {
+                    const on = isEffectActive(eff.id);
+                    return <div key={eff.id} className="effect-entry">{!on && <p className="minimal-hint">Enable this effect to adjust its settings.</p>}
+                        {eff.id === "halftone" && (
+                          <EffectHalftoneControls
+                            settings={getEffectSettings("halftone", DEFAULT_HALFTONE_SETTINGS)}
+                            onChange={(patch) => updateEffectSettings("halftone", patch)}
+                          />
+                        )}
+                        {eff.id === "pixelate" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("pixelate", DEFAULT_PIXELATE)}
+                            onChange={(patch) => updateEffectSettings("pixelate", patch)}
+                            controls={[{ key: "blockSize", label: "Block size", min: 2, max: 40, step: 1 }]}
+                          />
+                        )}
+                        {eff.id === "glitch" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("glitch", DEFAULT_GLITCH)}
+                            onChange={(patch) => updateEffectSettings("glitch", patch)}
+                            controls={[
+                              { key: "shift", label: "Shift", min: 1, max: 30, step: 1 },
+                              { key: "intensity", label: "Intensity", min: 0.1, max: 1, step: 0.05 },
+                              { key: "jitter", label: "Jitter", min: 0, max: 10, step: 0.5 },
+                            ]}
+                          />
+                        )}
+                        {eff.id === "motion-blur" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("motion-blur", DEFAULT_MOTION_BLUR)}
+                            onChange={(patch) => updateEffectSettings("motion-blur", patch)}
+                            controls={[
+                              { key: "length", label: "Length", min: 1, max: 50, step: 1 },
+                              { key: "angle", label: "Angle", min: 0, max: 360, step: 1 },
+                              { key: "quality", label: "Quality", min: 2, max: 20, step: 1 },
+                            ]}
+                          />
+                        )}
+                        {eff.id === "radial-blur" && (
+                          <EffectRadialBlurControls
+                            settings={getEffectSettings("radial-blur", DEFAULT_RADIAL_BLUR)}
+                            onChange={(patch) => updateEffectSettings("radial-blur", patch)}
+                          />
+                        )}
+                        {eff.id === "duotone" && (
+                          <EffectDuotoneControls
+                            settings={getEffectSettings("duotone", DEFAULT_DUOTONE)}
+                            onChange={(patch) => updateEffectSettings("duotone", patch)}
+                          />
+                        )}
+                        {eff.id === "vignette" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("vignette", DEFAULT_VIGNETTE)}
+                            onChange={(patch) => updateEffectSettings("vignette", patch)}
+                            controls={[
+                              { key: "strength", label: "Strength", min: 0, max: 1, step: 0.05 },
+                              { key: "radius", label: "Radius", min: 0.1, max: 1.5, step: 0.05 },
+                            ]}
+                          />
+                        )}
+                        {eff.id === "noise" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("noise", DEFAULT_NOISE)}
+                            onChange={(patch) => updateEffectSettings("noise", patch)}
+                            controls={[{ key: "amount", label: "Amount", min: 0, max: 0.5, step: 0.01 }]}
+                          />
+                        )}
+                        {eff.id === "kaleidoscope" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("kaleidoscope", DEFAULT_KALEIDOSCOPE)}
+                            onChange={(patch) => updateEffectSettings("kaleidoscope", patch)}
+                            controls={[{ key: "segments", label: "Segments", min: 2, max: 24, step: 1 }]}
+                          />
+                        )}
+                        {eff.id === "ripple" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("ripple", DEFAULT_RIPPLE)}
+                            onChange={(patch) => updateEffectSettings("ripple", patch)}
+                            controls={[
+                              { key: "amplitude", label: "Amplitude", min: 1, max: 30, step: 1 },
+                              { key: "frequency", label: "Frequency", min: 1, max: 50, step: 1 },
+                            ]}
+                          />
+                        )}
+                        {eff.id === "ascii" && (
+                          <EffectASCIIControls
+                            settings={getEffectSettings("ascii", DEFAULT_ASCII)}
+                            onChange={(patch) => updateEffectSettings("ascii", patch)}
+                          />
+                        )}
+                        {eff.id === "receipt" && (
+                          <EffectSliderControls
+                            settings={getEffectSettings("receipt", DEFAULT_RECEIPT)}
+                            onChange={(patch) => updateEffectSettings("receipt", patch)}
+                            controls={[
+                              { key: "noise", label: "Noise", min: 0, max: 0.3, step: 0.01 },
+                              { key: "distortion", label: "Distortion", min: 0, max: 0.1, step: 0.005 },
+                              { key: "vignette", label: "Vignette", min: 0, max: 0.5, step: 0.01 },
+                            ]}
+                          />
+                        )}
+                        {eff.id === "crt" && (
+                          <EffectCRTControls
+                            settings={getEffectSettings("crt", DEFAULT_CRT)}
+                            onChange={(patch) => updateEffectSettings("crt", patch)}
+                          />
+                        )}
+                        {eff.id === "threshold" && (
+                          <EffectThresholdControls
+                            settings={getEffectSettings("threshold", DEFAULT_THRESHOLD)}
+                            onChange={(patch) => updateEffectSettings("threshold", patch)}
+                          />
+                        )}
+                        {eff.id === "rgb-shift" && (
+                          <EffectRGBShiftControls
+                            settings={getEffectSettings("rgb-shift", DEFAULT_RGB_SHIFT)}
+                            onChange={(patch) => updateEffectSettings("rgb-shift", patch)}
+                          />
+                        )}
+                        {eff.id === "motion-trail" && (
+                          <EffectMotionTrailControls
+                            settings={getEffectSettings("motion-trail", DEFAULT_MOTION_TRAIL)}
+                            onChange={(patch) => updateEffectSettings("motion-trail", patch)}
+                          />
+                        )}
+                        {eff.id === "bloom" && (
+                          <EffectBloomControls
+                            settings={getEffectSettings("bloom", DEFAULT_BLOOM)}
+                            onChange={(patch) => updateEffectSettings("bloom", patch)}
+                          />
+                        )}
+                        {eff.id === "emboss" && (
+                          <EffectEmbossControls
+                            settings={getEffectSettings("emboss", DEFAULT_EMBOSS)}
+                            onChange={(patch) => updateEffectSettings("emboss", patch)}
+                          />
+                        )}
+                    </div>;
+                  })}
                 </div>
-              ) : (
-                <div className={`upload-zone ${isDragging ? "drag-over" : ""}`} onClick={() => fileInputRef.current?.click()} onDragOver={handleFileDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 16V4" /><path d="M6 10l6-6 6 6" /><path d="M4 20h16" />
-                  </svg>
-                  <span>Upload an image</span>
-                </div>
-              )}
+              </> : <div className="minimal-inspector-empty">Select an effect to edit its settings.</div>}
+              <div className="minimal-processing"><span>Processing</span><small>{processing ? "Working" : "Ready"}</small></div>
             </div>
-
             {/* Layers */}
             <div className="layers-section">
               <div className="workspace-section-header">
-                <span>Layers ({layers.length + activeEffects.length})</span>
-                <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                  <button className="icon-btn" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)" style={{ fontSize: "14px" }}>&#x21A9;</button>
-                  <button className="icon-btn" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)" style={{ fontSize: "14px" }}>&#x21AA;</button>
-                  <button className="btn btn-ghost" onClick={() => addLayer("mono")} style={{ padding: "4px 10px", fontSize: "12px" }}>+ Add</button>
+                <span>Layers ({layers.length})</span>
+                <div className="layer-header-actions">
+                  <button className="icon-btn" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)" aria-label="Undo" style={{ fontSize: "14px" }}>&#x21A9;</button>
+                  <button className="icon-btn" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)" aria-label="Redo" style={{ fontSize: "14px" }}>&#x21AA;</button>
+                  <button className="btn btn-ghost" onClick={() => addLayer("bloom:35mm")} style={{ padding: "4px 10px", fontSize: "12px" }}>+ Add</button>
                 </div>
               </div>
-              {layers.length === 0 && activeEffects.length === 0 ? (
+              {layers.length === 0 ? (
                 <div className="layers-empty">
-                  Click a preset or effect to add a layer
+                  Apply a preset to add a layer
                 </div>
               ) : (
                 <div className="layers-list">
                   {layers.map((layer, i) => {
-                    const builtin = PRESETS.find((p) => p.id === layer.presetId);
-                    const user = userPresets.find((p) => p.id === layer.presetId);
-                    const layerPreset = builtin || user;
-                    const layerName = builtin?.name || user?.name || layer.presetId;
+                    const profile = PROFILE_BY_ID.get(layer.presetId);
+                    const layerLabel = `Layer ${i + 1}${profile?.name ? `: ${profile.name}` : ""}`;
+                    const cannotMoveUp = layer.locked || i === 0 || !!layers[i - 1]?.locked;
+                    const cannotMoveDown = layer.locked || i === layers.length - 1 || !!layers[i + 1]?.locked;
                     return (
                       <div
                         key={layer.id}
-                        className={`layer-item ${!layer.enabled ? "layer-disabled" : ""} ${dragIndex === i ? "layer-dragging" : ""}`}
-                        draggable
-                        onDragStart={() => handleDragStart(i)}
-                        onDragOver={(e) => handleDragOver(e, i)}
+                        className={`layer-item image-first-layer ${!layer.enabled ? "layer-disabled" : ""} ${dragIndex === i ? "layer-dragging" : ""} ${layer.locked ? "layer-is-locked" : ""}`}
+                        onDragOver={(event) => handleDragOver(event, i)}
                         onDragEnd={handleDragEnd}
                       >
                         <div className="layer-top">
                           <div className="layer-left">
-                            <span className="layer-index layer-grip">{i + 1}</span>
-                            <div className="layer-thumb-small">
-                              {currentImage && (
-                                <img src={currentImage.src} alt="" style={{ filter: resolvePresetFilter(layer.presetId, layer.intensity) }} />
-                              )}
-                            </div>
-                            <div>
-                              <div className="layer-name">{layerName}</div>
-                              <div className="layer-intensity-label">{layer.intensity}%</div>
+                            <div
+                              className={`layer-thumb-small layer-drag-handle ${layer.locked ? "is-locked" : ""}`}
+                              draggable={!layer.locked}
+                              onDragStart={(event) => handleDragStart(event, i)}
+                              title={layer.locked ? "Unlock to move this layer" : `Drag image to reorder ${layerLabel}`}
+                              aria-label={layer.locked ? `${layerLabel} is locked` : `Drag image to reorder ${layerLabel}`}
+                            >
+                              {currentImage && <span className="layer-image-preview" aria-hidden="true" style={{ backgroundImage: `url("${effectResultSrc ?? currentImage.src}")` }} />}
+                              {!layer.locked && <span className="layer-drag-hint" aria-hidden="true"><i /><i /><i /><i /><i /><i /></span>}
+                              {layer.locked && <span className="layer-thumb-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg></span>}
                             </div>
                           </div>
-                          <div className="layer-actions">
-                            <button className="icon-btn" onClick={() => toggleLayer(layer.id)} title={layer.enabled ? "Disable" : "Enable"}>
+                          <div className="layer-actions" role="group" aria-label={`${layerLabel} controls`}>
+                            <button type="button" className={`icon-btn layer-visibility ${layer.enabled ? "is-visible" : ""}`} onClick={() => toggleLayer(layer.id)} title={layer.enabled ? "Hide layer" : "Show layer"} aria-label={`${layer.enabled ? "Hide" : "Show"} ${layerLabel}`} aria-pressed={layer.enabled}>
                               {layer.enabled ? (
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                  <circle cx="12" cy="12" r="3" />
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
                                 </svg>
                               ) : (
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24" />
-                                  <path d="M1 1l22 22" />
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><path d="M1 1l22 22" />
                                 </svg>
                               )}
                             </button>
-                            <button className="icon-btn" onClick={() => moveLayer(layer.id, "up")} disabled={i === 0} title="Move up">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M18 15l-6-6-6 6" /></svg>
+                            <button type="button" className={`icon-btn layer-lock ${layer.locked ? "is-locked" : ""}`} onClick={() => toggleLayerLock(layer.id)} title={layer.locked ? "Unlock layer" : "Lock layer"} aria-label={`${layer.locked ? "Unlock" : "Lock"} ${layerLabel}`} aria-pressed={!!layer.locked}>
+                              {layer.locked ? (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+                              ) : (
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 7.5-2" /></svg>
+                              )}
                             </button>
-                            <button className="icon-btn" onClick={() => moveLayer(layer.id, "down")} disabled={i === layers.length - 1} title="Move down">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                            <span className="layer-action-divider" aria-hidden="true" />
+                            <button type="button" className="icon-btn layer-move" onClick={() => moveLayer(layer.id, "up")} disabled={cannotMoveUp} title={layer.locked ? "Unlock layer to move it" : i === 0 ? "Layer is already at the top" : layers[i - 1]?.locked ? "Unlock the layer above first" : "Move layer up"} aria-label={`Move ${layerLabel} up`}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6" /></svg>
                             </button>
-                            <button className="icon-btn" onClick={() => removeLayer(layer.id)} title="Remove" style={{ color: "var(--ink-muted)" }}>
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18" /><path d="M6 6l12 12" /></svg>
+                            <button type="button" className="icon-btn layer-move" onClick={() => moveLayer(layer.id, "down")} disabled={cannotMoveDown} title={layer.locked ? "Unlock layer to move it" : i === layers.length - 1 ? "Layer is already at the bottom" : layers[i + 1]?.locked ? "Unlock the layer below first" : "Move layer down"} aria-label={`Move ${layerLabel} down`}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                            </button>
+                            <span className="layer-action-divider" aria-hidden="true" />
+                            <button type="button" className="icon-btn layer-remove" onClick={() => removeLayer(layer.id)} title="Remove layer" aria-label={`Remove ${layerLabel}`}>
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
                             </button>
                           </div>
                         </div>
                         <div className="layer-slider-row">
-                          <input
-                            type="range"
-                            min="0"
-                            max="100"
-                            value={layer.intensity}
-                            onChange={(e) => updateLayerIntensity(layer.id, Number(e.target.value))}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {activeEffects.map((effId, i) => {
-                    const def = EFFECTS.find((e) => e.id === effId);
-                    return (
-                      <div key={effId} className="layer-item layer-effect-item">
-                        <div className="layer-top">
-                          <div className="layer-left">
-                            <span className="layer-index">{layers.length + i + 1}</span>
-                            <div className="layer-thumb-small layer-icon-thumb">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18 }}>
-                                <rect x="2" y="2" width="20" height="20" rx="2.5" />
-                                <circle cx="12" cy="12" r="3" />
-                              </svg>
-                            </div>
-                            <div>
-                              <div className="layer-name">{def?.name || effId}</div>
-                              <span className="effect-badge" style={{ fontSize: 10, padding: "1px 6px" }}>canvas</span>
-                            </div>
-                          </div>
-                          <div className="layer-actions">
-                            <button className="icon-btn" onClick={() => toggleEffect(effId)} title="Toggle effect">
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-muted)" }}>
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                                <circle cx="12" cy="12" r="3" />
-                              </svg>
-                            </button>
-                          </div>
+                          <span className="layer-intensity-title">Opacity</span>
+                          <RangeValueControl label={`${layerLabel} opacity`} min={0} max={100} step={1} value={layer.intensity} unit="%" onChange={(value) => updateLayerIntensity(layer.id, value)} />
                         </div>
                       </div>
                     );
@@ -1030,10 +1043,9 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-
-        <div className="export-bar">
+            <div className="minimal-panel-section minimal-export-section">
+              <div className="minimal-section-heading"><span>Export</span></div>
+              <div className="export-bar minimal-export-bar">
           <div className="export-left">
             <span style={{ fontSize: "13px", color: "var(--ink-muted)" }}>Export as</span>
             <select className="export-select" value={exportFormat} onChange={(e) => setExportFormat(e.target.value)}>
@@ -1061,16 +1073,20 @@ export default function Home() {
             </button>
           </div>
         </div>
+            </div>
+          </div>
+        </div>
+
       </section>
 
       <div className={`modal-backdrop ${showExport ? "show" : ""}`} onClick={() => setShowExport(false)} />
       <div className={`modal ${showExport ? "show" : ""}`}>
         <div className="modal-preview">
-          {currentImage && <ImageWithSkeleton src={activeEffects.length > 0 && effectResultSrc ? effectResultSrc : currentImage.src} alt="Final preview" imgStyle={{ filter: compare === "edited" ? getCombinedFilterString() : "none" }} />}
+          {currentImage && <ImageWithSkeleton src={compare === "edited" ? (effectResultSrc ?? currentImage.src) : currentImage.src} alt="Final preview" />}
         </div>
         {guestMode && (
           <p style={{ fontSize: "12px", color: "var(--ink-muted)", textAlign: "center", margin: "0 0 12px" }}>
-            Sign in to download. Edits are ready — they won&apos;t be lost.
+            Sign in to download. Edits are ready â€” they won&apos;t be lost.
           </p>
         )}
         <div className="modal-actions">
@@ -1115,6 +1131,31 @@ function EffectDuotoneControls({ settings, onChange }: {
   );
 }
 
+function EffectNumericControl({ settings, settingKey, label, min, max, step, onChange }: {
+  settings: object;
+  settingKey: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (patch: Record<string, number>) => void;
+}) {
+  const settingValue = (settings as Record<string, unknown>)[settingKey];
+  return (
+    <div className="effect-control">
+      <span className="effect-control-label">{label}</span>
+      <RangeValueControl
+        label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={typeof settingValue === "number" ? settingValue : min}
+        onChange={(value) => onChange({ [settingKey]: value })}
+      />
+    </div>
+  );
+}
+
 function EffectHalftoneControls({ settings, onChange }: {
   settings: HalftoneSettings;
   onChange: (patch: Record<string, any>) => void;
@@ -1126,22 +1167,10 @@ function EffectHalftoneControls({ settings, onChange }: {
         onSelect={(mapKey) => onChange({ thresholdMap: mapKey })}
       />
       <div className="effect-controls">
-        <div className="effect-control">
-          <label>Scale ({settings.patternScale.toFixed(2)})</label>
-          <input type="range" min="0.3" max="3.5" step="0.01" value={settings.patternScale} onChange={(e) => onChange({ patternScale: +e.target.value })} />
-        </div>
-        <div className="effect-control">
-          <label>Brightness ({settings.brightness})</label>
-          <input type="range" min="0" max="255" step="1" value={settings.brightness} onChange={(e) => onChange({ brightness: +e.target.value })} />
-        </div>
-        <div className="effect-control">
-          <label>Contrast ({settings.contrast.toFixed(2)})</label>
-          <input type="range" min="0.3" max="3" step="0.01" value={settings.contrast} onChange={(e) => onChange({ contrast: +e.target.value })} />
-        </div>
-        <div className="effect-control">
-          <label>Offset ({settings.thresholdOffset.toFixed(3)})</label>
-          <input type="range" min="-0.4" max="0.4" step="0.005" value={settings.thresholdOffset} onChange={(e) => onChange({ thresholdOffset: +e.target.value })} />
-        </div>
+        <EffectNumericControl settings={settings} settingKey="patternScale" label="Scale" min={0.3} max={3.5} step={0.01} onChange={onChange} />
+        <EffectNumericControl settings={settings} settingKey="brightness" label="Brightness" min={0} max={255} step={1} onChange={onChange} />
+        <EffectNumericControl settings={settings} settingKey="contrast" label="Contrast" min={0.3} max={3} step={0.01} onChange={onChange} />
+        <EffectNumericControl settings={settings} settingKey="thresholdOffset" label="Offset" min={-0.4} max={0.4} step={0.005} onChange={onChange} />
         <div className="effect-control effect-toggle">
           <label>Invert</label>
           <button className={`btn btn-ghost ${settings.invert ? "active" : ""}`} onClick={() => onChange({ invert: !settings.invert })} style={{ padding: "4px 12px", fontSize: "12px" }}>
@@ -1166,22 +1195,10 @@ function EffectRadialBlurControls({ settings, onChange }: {
           <option value="spin">Spin</option>
         </select>
       </div>
-      <div className="effect-control">
-        <label>Strength ({settings.strength})</label>
-        <input type="range" min="1" max="50" step="1" value={settings.strength} onChange={(e) => onChange({ strength: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Center X ({settings.centerX})</label>
-        <input type="range" min="0" max="100" step="1" value={settings.centerX} onChange={(e) => onChange({ centerX: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Center Y ({settings.centerY})</label>
-        <input type="range" min="0" max="100" step="1" value={settings.centerY} onChange={(e) => onChange({ centerY: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Quality ({settings.quality})</label>
-        <input type="range" min="2" max="30" step="1" value={settings.quality} onChange={(e) => onChange({ quality: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="strength" label="Strength" min={1} max={50} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="centerX" label="Center X" min={0} max={100} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="centerY" label="Center Y" min={0} max={100} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="quality" label="Quality" min={2} max={30} step={1} onChange={onChange} />
     </div>
   );
 }
@@ -1200,10 +1217,7 @@ function EffectASCIIControls({ settings, onChange }: {
           ))}
         </select>
       </div>
-      <div className="effect-control">
-        <label>Scale ({settings.scale})</label>
-        <input type="range" min="1" max="12" step="1" value={settings.scale} onChange={(e) => onChange({ scale: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="scale" label="Scale" min={1} max={12} step={1} onChange={onChange} />
       <div className="effect-control effect-toggle">
         <label>Invert</label>
         <button className={`btn btn-ghost ${settings.invert ? "active" : ""}`} onClick={() => onChange({ invert: !settings.invert })} style={{ padding: "4px 12px", fontSize: "12px" }}>
@@ -1218,22 +1232,10 @@ function EffectASCIIControls({ settings, onChange }: {
 function EffectCRTControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Scanlines ({settings.scanlines})</label>
-        <input type="range" min="1" max="8" step="1" value={settings.scanlines} onChange={(e) => onChange({ scanlines: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Curvature ({settings.curvature})</label>
-        <input type="range" min="0" max="30" step="1" value={settings.curvature} onChange={(e) => onChange({ curvature: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Glow ({settings.glow})</label>
-        <input type="range" min="0" max="1" step="0.05" value={settings.glow} onChange={(e) => onChange({ glow: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Flicker ({settings.flicker})</label>
-        <input type="range" min="0" max="0.3" step="0.01" value={settings.flicker} onChange={(e) => onChange({ flicker: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="scanlines" label="Scanlines" min={1} max={8} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="curvature" label="Curvature" min={0} max={30} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="glow" label="Glow" min={0} max={1} step={0.05} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="flicker" label="Flicker" min={0} max={0.3} step={0.01} onChange={onChange} />
     </div>
   );
 }
@@ -1241,14 +1243,8 @@ function EffectCRTControls({ settings, onChange }: { settings: any; onChange: (p
 function EffectThresholdControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Level ({settings.level})</label>
-        <input type="range" min="0" max="255" step="1" value={settings.level} onChange={(e) => onChange({ level: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Softness ({settings.softness})</label>
-        <input type="range" min="0" max="50" step="1" value={settings.softness} onChange={(e) => onChange({ softness: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="level" label="Level" min={0} max={255} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="softness" label="Softness" min={0} max={50} step={1} onChange={onChange} />
       <div className="effect-control effect-toggle">
         <label>Invert</label>
         <button className={`btn btn-ghost ${settings.invert ? "active" : ""}`} onClick={() => onChange({ invert: !settings.invert })} style={{ padding: "4px 12px", fontSize: "12px" }}>
@@ -1262,14 +1258,8 @@ function EffectThresholdControls({ settings, onChange }: { settings: any; onChan
 function EffectRGBShiftControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Shift X ({settings.shiftX})</label>
-        <input type="range" min="-20" max="20" step="1" value={settings.shiftX} onChange={(e) => onChange({ shiftX: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Shift Y ({settings.shiftY})</label>
-        <input type="range" min="-20" max="20" step="1" value={settings.shiftY} onChange={(e) => onChange({ shiftY: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="shiftX" label="Shift X" min={-20} max={20} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="shiftY" label="Shift Y" min={-20} max={20} step={1} onChange={onChange} />
       <div className="effect-control">
         <label>Channel</label>
         <select className="export-select" value={settings.channel} onChange={(e) => onChange({ channel: e.target.value })}>
@@ -1285,18 +1275,9 @@ function EffectRGBShiftControls({ settings, onChange }: { settings: any; onChang
 function EffectMotionTrailControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Length ({settings.length})</label>
-        <input type="range" min="1" max="40" step="1" value={settings.length} onChange={(e) => onChange({ length: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Decay ({settings.decay})</label>
-        <input type="range" min="0.1" max="1" step="0.05" value={settings.decay} onChange={(e) => onChange({ decay: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Angle ({settings.angle})</label>
-        <input type="range" min="0" max="360" step="1" value={settings.angle} onChange={(e) => onChange({ angle: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="length" label="Length" min={1} max={40} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="decay" label="Decay" min={0.1} max={1} step={0.05} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="angle" label="Angle" min={0} max={360} step={1} onChange={onChange} />
     </div>
   );
 }
@@ -1304,18 +1285,9 @@ function EffectMotionTrailControls({ settings, onChange }: { settings: any; onCh
 function EffectBloomControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Threshold ({settings.threshold})</label>
-        <input type="range" min="50" max="255" step="1" value={settings.threshold} onChange={(e) => onChange({ threshold: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Radius ({settings.radius})</label>
-        <input type="range" min="1" max="10" step="1" value={settings.radius} onChange={(e) => onChange({ radius: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Intensity ({settings.intensity})</label>
-        <input type="range" min="0" max="2" step="0.05" value={settings.intensity} onChange={(e) => onChange({ intensity: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="threshold" label="Threshold" min={50} max={255} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="radius" label="Radius" min={1} max={10} step={1} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="intensity" label="Intensity" min={0} max={2} step={0.05} onChange={onChange} />
     </div>
   );
 }
@@ -1323,14 +1295,8 @@ function EffectBloomControls({ settings, onChange }: { settings: any; onChange: 
 function EffectEmbossControls({ settings, onChange }: { settings: any; onChange: (patch: Record<string, any>) => void }) {
   return (
     <div className="effect-controls">
-      <div className="effect-control">
-        <label>Strength ({settings.strength})</label>
-        <input type="range" min="0.5" max="10" step="0.5" value={settings.strength} onChange={(e) => onChange({ strength: +e.target.value })} />
-      </div>
-      <div className="effect-control">
-        <label>Angle ({settings.angle})</label>
-        <input type="range" min="0" max="360" step="1" value={settings.angle} onChange={(e) => onChange({ angle: +e.target.value })} />
-      </div>
+      <EffectNumericControl settings={settings} settingKey="strength" label="Strength" min={0.5} max={10} step={0.5} onChange={onChange} />
+      <EffectNumericControl settings={settings} settingKey="angle" label="Angle" min={0} max={360} step={1} onChange={onChange} />
     </div>
   );
 }
