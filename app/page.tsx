@@ -48,6 +48,7 @@ export default function Home() {
   const [currentImage, setCurrentImage] = useState<CurrentImage | null>(null);
   const [layers, setLayers] = useState<EffectLayer[]>([]);
   const [compare, setCompare] = useState<"edited" | "original">("edited");
+  const [comparePosition, setComparePosition] = useState(50);
   const [showExport, setShowExport] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedEffectId, setSelectedEffectId] = useState<EffectId | null>(null);
@@ -119,6 +120,28 @@ export default function Home() {
   }, [panning, panStart]);
 
   const handleMouseUp = useCallback(() => { setPanning(false); }, []);
+  const updateComparePosition = useCallback((clientX: number) => {
+    const viewport = viewportRef.current;
+    if (!viewport || !imgNatural.w) return;
+    const rect = viewport.getBoundingClientRect();
+    const imageLeft = rect.left + panX;
+    const imageWidth = imgNatural.w * zoom;
+    const position = Math.max(0, Math.min(100, ((clientX - imageLeft) / imageWidth) * 100));
+    setComparePosition(position);
+    setCompare("edited");
+  }, [imgNatural.w, panX, zoom]);
+  const handleCompareKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    let nextPosition: number | null = null;
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") nextPosition = comparePosition - step;
+    if (event.key === "ArrowRight" || event.key === "ArrowUp") nextPosition = comparePosition + step;
+    if (event.key === "Home") nextPosition = 0;
+    if (event.key === "End") nextPosition = 100;
+    if (nextPosition === null) return;
+    event.preventDefault();
+    setComparePosition(Math.max(0, Math.min(100, nextPosition)));
+    setCompare("edited");
+  }, [comparePosition]);
   const layersRef = useRef(layers);
   useEffect(() => { layersRef.current = layers; }, [layers]);
   const [undoStack, setUndoStack] = useState<EffectLayer[][]>([]);
@@ -262,6 +285,7 @@ export default function Home() {
       setCurrentImage({ src: ev.target?.result as string, name: file.name });
       setLayers([]);
       setCompare("edited");
+      setComparePosition(50);
       setImgNatural({ w: 0, h: 0 });
       showScreen("editor");
     };
@@ -772,29 +796,69 @@ export default function Home() {
                   onMouseUp={handleMouseUp}
                   onMouseLeave={handleMouseUp}
                 >
-                  <img
-                    src={compare === "original" ? currentImage.src : (effectResultSrc ?? currentImage.src)}
-                    alt="Final output"
-                    draggable={false}
-                    onLoad={(e) => {
-                      const n = e.currentTarget;
-                      setImgNatural({ w: n.naturalWidth, h: n.naturalHeight });
-                      const vp = viewportRef.current;
-                      if (!vp) return;
-                      const r = vp.getBoundingClientRect();
-                      const f = Math.min(r.width / n.naturalWidth, r.height / n.naturalHeight) * 0.95;
-                      setZoom(f);
-                      setPanX((r.width - n.naturalWidth * f) / 2);
-                      setPanY((r.height - n.naturalHeight * f) / 2);
-                    }}
-                    style={{
-                      display: "block",
-                      maxWidth: "none",
-                      maxHeight: "none",
-                      transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
-                      transformOrigin: "0 0",
-                    }}
-                  />
+                  <div className="compare-image-stage" style={{
+                    width: imgNatural.w || undefined,
+                    height: imgNatural.h || undefined,
+                    transform: `translate(${panX}px, ${panY}px) scale(${zoom})`,
+                  }}>
+                    <img
+                      src={effectResultSrc ?? currentImage.src}
+                      alt="Edited image"
+                      draggable={false}
+                      onLoad={(e) => {
+                        const n = e.currentTarget;
+                        if (imgNatural.w > 0) return;
+                        setImgNatural({ w: n.naturalWidth, h: n.naturalHeight });
+                        const vp = viewportRef.current;
+                        if (!vp) return;
+                        const r = vp.getBoundingClientRect();
+                        const f = Math.min(r.width / n.naturalWidth, r.height / n.naturalHeight) * 0.95;
+                        setZoom(f);
+                        setPanX((r.width - n.naturalWidth * f) / 2);
+                        setPanY((r.height - n.naturalHeight * f) / 2);
+                      }}
+                      className="compare-edited-image"
+                    />
+                    <div className="compare-original-clip" style={{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }}>
+                      <img src={currentImage.src} alt="Original image" draggable={false} className="compare-original-image" />
+                    </div>
+                    {comparePosition > 0 && <span className="compare-image-label compare-image-label-original">Original</span>}
+                    {comparePosition < 100 && <span className="compare-image-label compare-image-label-edited">Edited</span>}
+                  </div>
+                  {imgNatural.w > 0 && (
+                    <div
+                      className="compare-divider"
+                      role="slider"
+                      tabIndex={0}
+                      aria-label="Before and after comparison"
+                      aria-orientation="vertical"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(comparePosition)}
+                      aria-valuetext={`${Math.round(comparePosition)}% original, ${Math.round(100 - comparePosition)}% edited`}
+                      onKeyDown={handleCompareKeyDown}
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        updateComparePosition(event.clientX);
+                      }}
+                      onPointerMove={(event) => {
+                        if (event.currentTarget.hasPointerCapture(event.pointerId)) updateComparePosition(event.clientX);
+                      }}
+                      onPointerUp={(event) => {
+                        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      style={{
+                        left: panX + imgNatural.w * zoom * comparePosition / 100,
+                        top: panY,
+                        height: imgNatural.h * zoom,
+                      }}
+                    >
+                      <span aria-hidden="true" />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <span className="preview-empty">No image selected</span>
@@ -802,8 +866,9 @@ export default function Home() {
             </div>
             {currentImage && (
               <div className="workspace-controls">
-                <button className={compare === "edited" ? "active" : ""} onClick={() => setCompare("edited")}>Edited</button>
-                <button className={compare === "original" ? "active" : ""} onClick={() => setCompare("original")}>Original</button>
+                <button className={comparePosition === 0 ? "active" : ""} onClick={() => { setCompare("edited"); setComparePosition(0); }}>Edited</button>
+                <button className={comparePosition > 0 && comparePosition < 100 ? "active" : ""} onClick={() => { setCompare("edited"); setComparePosition(50); }}>Compare</button>
+                <button className={comparePosition === 100 ? "active" : ""} onClick={() => { setCompare("original"); setComparePosition(100); }}>Original</button>
               </div>
             )}
           </aside>
